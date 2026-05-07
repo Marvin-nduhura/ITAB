@@ -1,43 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MapPin, Crosshair, Loader2, CheckCircle2, AlertCircle, X, Navigation } from 'lucide-react';
-import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
-import L from 'leaflet';
+import { GoogleMap, useJsApiLoader, Marker } from '@react-google-maps/api';
 import { useGeolocation } from '../../hooks/useGeolocation';
 import { Button } from './Button';
 import { cn } from '../../lib/utils';
 
-// Fix leaflet default icon
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-});
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
 
-// Custom pulsing "you are here" icon
-const youAreHereIcon = L.divIcon({
-  className: '',
-  html: `<div style="position:relative;width:24px;height:24px">
-    <div style="position:absolute;inset:0;background:#2563eb;border-radius:50%;opacity:0.25;animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite"></div>
-    <div style="position:absolute;inset:4px;background:#2563eb;border-radius:50%;border:2px solid white;box-shadow:0 2px 8px rgba(37,99,235,0.5)"></div>
-  </div>`,
-  iconSize: [24, 24],
-  iconAnchor: [12, 12],
-});
-
-// Sub-component: fly map to new position
-function FlyTo({ lat, lng }: { lat: number; lng: number }) {
-  const map = useMap();
-  useEffect(() => { map.flyTo([lat, lng], 17, { duration: 1.2 }); }, [lat, lng]);
-  return null;
-}
-
-// Sub-component: click on map to move pin
-function ClickHandler({ onMove }: { onMove: (lat: number, lng: number) => void }) {
-  useMapEvents({ click: (e) => onMove(e.latlng.lat, e.latlng.lng) });
-  return null;
-}
+const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
+const DEFAULT_CENTER = { lat: 0.3476, lng: 32.5825 }; // Kampala, Uganda
 
 export interface LocationValue {
   lat: number;
@@ -53,7 +25,7 @@ interface LocationPickerProps {
   label?: string;
   hint?: string;
   className?: string;
-  compact?: boolean;   // smaller inline version
+  compact?: boolean;
 }
 
 export function LocationPicker({
@@ -61,10 +33,16 @@ export function LocationPicker({
 }: LocationPickerProps) {
   const { position, status, error, getLocation, clearLocation } = useGeolocation();
   const [showMap, setShowMap] = useState(false);
-  const [pinLat, setPinLat] = useState<number>(value?.lat ?? 0.3476);
-  const [pinLng, setPinLng] = useState<number>(value?.lng ?? 32.5825);
+  const [pinLat, setPinLat] = useState<number>(value?.lat ?? DEFAULT_CENTER.lat);
+  const [pinLng, setPinLng] = useState<number>(value?.lng ?? DEFAULT_CENTER.lng);
   const [pinAddress, setPinAddress] = useState<string>(value?.address ?? '');
   const [reverseLoading, setReverseLoading] = useState(false);
+  const mapRef = useRef<google.maps.Map | null>(null);
+
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
+    libraries: ['places'],
+  });
 
   // When GPS succeeds, move pin there
   useEffect(() => {
@@ -72,29 +50,38 @@ export function LocationPicker({
       setPinLat(position.lat);
       setPinLng(position.lng);
       setPinAddress(position.address ?? '');
+      mapRef.current?.panTo({ lat: position.lat, lng: position.lng });
     }
   }, [position, status]);
 
-  // Reverse geocode when pin is moved manually on map
-  const handlePinMove = async (lat: number, lng: number) => {
-    setPinLat(lat);
-    setPinLng(lng);
+  // Reverse geocode using Google Maps Geocoding API
+  const reverseGeocode = useCallback(async (lat: number, lng: number) => {
     setReverseLoading(true);
     try {
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-        { headers: { 'Accept-Language': 'en' } }
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`
       );
       const data = await res.json();
-      const a = data.address || {};
-      const parts = [a.road || a.pedestrian, a.suburb || a.neighbourhood, a.city || a.town || a.village].filter(Boolean);
-      setPinAddress(parts.join(', ') || data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+      if (data.status === 'OK' && data.results.length > 0) {
+        setPinAddress(data.results[0].formatted_address);
+      } else {
+        setPinAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+      }
     } catch {
       setPinAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
     } finally {
       setReverseLoading(false);
     }
-  };
+  }, []);
+
+  const handleMapClick = useCallback((e: google.maps.MapMouseEvent) => {
+    if (!e.latLng) return;
+    const lat = e.latLng.lat();
+    const lng = e.latLng.lng();
+    setPinLat(lat);
+    setPinLng(lng);
+    reverseGeocode(lat, lng);
+  }, [reverseGeocode]);
 
   const handleConfirm = () => {
     onChange({ lat: pinLat, lng: pinLng, address: pinAddress, accuracy: position?.accuracy });
@@ -269,23 +256,28 @@ export function LocationPicker({
 
               {/* Map */}
               <div className="h-80">
-                <MapContainer
-                  center={[pinLat || 0.3476, pinLng || 32.5825]}
-                  zoom={15}
-                  style={{ height: '100%', width: '100%' }}
-                >
-                  <TileLayer
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                  />
-                  <ClickHandler onMove={handlePinMove} />
-                  {(pinLat && pinLng) && (
-                    <>
-                      <Marker position={[pinLat, pinLng]} icon={youAreHereIcon} />
-                      <FlyTo lat={pinLat} lng={pinLng} />
-                    </>
-                  )}
-                </MapContainer>
+                {isLoaded ? (
+                  <GoogleMap
+                    mapContainerStyle={MAP_CONTAINER_STYLE}
+                    center={{ lat: pinLat || DEFAULT_CENTER.lat, lng: pinLng || DEFAULT_CENTER.lng }}
+                    zoom={15}
+                    onClick={handleMapClick}
+                    onLoad={(map) => { mapRef.current = map; }}
+                    options={{
+                      streetViewControl: false,
+                      mapTypeControl: false,
+                      fullscreenControl: false,
+                    }}
+                  >
+                    {pinLat && pinLng && (
+                      <Marker position={{ lat: pinLat, lng: pinLng }} />
+                    )}
+                  </GoogleMap>
+                ) : (
+                  <div className="h-full flex items-center justify-center bg-slate-100 dark:bg-slate-700">
+                    <Loader2 size={24} className="animate-spin text-primary-600" />
+                  </div>
+                )}
               </div>
 
               {/* Address preview */}

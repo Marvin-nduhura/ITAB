@@ -5,7 +5,7 @@ import { GoogleOAuthProvider } from '@react-oauth/google'
 import './index.css'
 import App from './App.tsx'
 
-const GOOGLE_CLIENT_ID = '182672984991-9asmi83o6g44lm3fk9hsfpobkn2ukdlp.apps.googleusercontent.com';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '175259307244-o7jm96av8iceqsagkelafbqsd0aemq6f.apps.googleusercontent.com';
 
 // In development, unregister any stale service workers that could block UI
 if (import.meta.env.DEV) {

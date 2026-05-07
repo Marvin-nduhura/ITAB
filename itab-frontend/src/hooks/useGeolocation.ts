@@ -6,7 +6,7 @@ export interface GeoPosition {
   lat: number;
   lng: number;
   accuracy: number;       // metres
-  address?: string;       // reverse-geocoded via Nominatim
+  address?: string;       // reverse-geocoded via Google Maps
 }
 
 export interface UseGeolocationReturn {
@@ -17,23 +17,20 @@ export interface UseGeolocationReturn {
   clearLocation: () => void;
 }
 
-// Reverse-geocode using OpenStreetMap Nominatim (free, no key needed)
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+
+// Reverse-geocode using Google Maps Geocoding API
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
   try {
+    if (!GOOGLE_MAPS_API_KEY) return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`,
-      { headers: { 'Accept-Language': 'en' } }
+      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`
     );
     const data = await res.json();
-    // Build a readable address from the response
-    const a = data.address || {};
-    const parts = [
-      a.road || a.pedestrian || a.footway,
-      a.suburb || a.neighbourhood || a.quarter,
-      a.city || a.town || a.village || a.county,
-      a.state_district || a.state,
-    ].filter(Boolean);
-    return parts.join(', ') || data.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+    if (data.status === 'OK' && data.results.length > 0) {
+      return data.results[0].formatted_address;
+    }
+    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   } catch {
     return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   }
@@ -80,11 +77,7 @@ export function useGeolocation(): UseGeolocationReturn {
             setError('An unknown error occurred while getting your location.');
         }
       },
-      {
-        enableHighAccuracy: true,   // use GPS on mobile
-        timeout: 15000,
-        maximumAge: 60000,          // accept cached position up to 1 min old
-      }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
     );
   }, []);
 

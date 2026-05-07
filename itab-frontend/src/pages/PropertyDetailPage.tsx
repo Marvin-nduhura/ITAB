@@ -13,12 +13,10 @@ import { useGeolocation } from '../hooks/useGeolocation';
 import { formatCurrency, propertyStatusConfig, amenityIcons, INSPECTION_FEE } from '../lib/utils';
 import { canDo } from '../lib/rbac';
 import toast from 'react-hot-toast';
-import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
-import L from 'leaflet';
+import { GoogleMap, useJsApiLoader, Marker, Circle } from '@react-google-maps/api';
 
-// Fix leaflet default icon
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
-L.Icon.Default.mergeOptions({ iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png', iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png' });
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
 
 export function PropertyDetailPage() {
   const { id } = useParams();
@@ -27,6 +25,7 @@ export function PropertyDetailPage() {
   // ── ALL hooks must be called before any conditional return ──────────────
   const { properties, updateProperty } = usePropertyStore();
   const { position, status: geoStatus, getLocation } = useGeolocation();
+  const { isLoaded: mapsLoaded } = useJsApiLoader({ googleMapsApiKey: GOOGLE_MAPS_API_KEY });
   const [photoIdx, setPhotoIdx] = useState(0);
   const [isFavorite, setIsFavorite] = useState(false);
   const [showBookModal, setShowBookModal] = useState(false);
@@ -404,7 +403,7 @@ export function PropertyDetailPage() {
                 </button>
                 {/* Directions */}
                 <a
-                  href={`https://www.openstreetmap.org/directions?from=${position ? `${position.lat},${position.lng}` : ''}&to=${property.latitude},${property.longitude}`}
+                  href={`https://www.google.com/maps/dir/${position ? `${position.lat},${position.lng}` : ''}/${property.latitude},${property.longitude}`}
                   target="_blank" rel="noopener noreferrer"
                   className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium transition-all"
                 >
@@ -415,29 +414,33 @@ export function PropertyDetailPage() {
             <div className="h-64 rounded-xl overflow-hidden">
               {/* Guard: only render map when we have valid coordinates */}
               {(property.latitude && property.longitude && !isNaN(property.latitude) && !isNaN(property.longitude)) ? (
-                <MapContainer
-                  center={[property.latitude, property.longitude]}
-                  zoom={15}
-                  style={{ height: '100%', width: '100%' }}
-                  scrollWheelZoom={false}
-                >
-                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
-                  {/* Property marker */}
-                  <Marker position={[property.latitude, property.longitude]}>
-                    <Popup><b>{property.title}</b><br />{property.address}</Popup>
-                  </Marker>
-                  {/* User location */}
-                  {position && (
-                    <>
-                      <Marker position={[position.lat, position.lng]}
-                        icon={L.divIcon({ className: '', html: `<div style="width:18px;height:18px;background:#2563eb;border-radius:50%;border:3px solid white;box-shadow:0 2px 8px rgba(37,99,235,0.5)"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] })}>
-                        <Popup>📍 You are here</Popup>
-                      </Marker>
-                      <Circle center={[position.lat, position.lng]} radius={position.accuracy || 50}
-                        pathOptions={{ color: '#2563eb', fillColor: '#2563eb', fillOpacity: 0.1, weight: 1 }} />
-                    </>
-                  )}
-                </MapContainer>
+                mapsLoaded ? (
+                  <GoogleMap
+                    mapContainerStyle={MAP_CONTAINER_STYLE}
+                    center={{ lat: property.latitude, lng: property.longitude }}
+                    zoom={15}
+                    options={{ streetViewControl: false, mapTypeControl: false, scrollwheel: false }}
+                  >
+                    <Marker position={{ lat: property.latitude, lng: property.longitude }} />
+                    {position && (
+                      <>
+                        <Marker
+                          position={{ lat: position.lat, lng: position.lng }}
+                          icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#2563eb', fillOpacity: 1, strokeColor: 'white', strokeWeight: 2 }}
+                        />
+                        <Circle
+                          center={{ lat: position.lat, lng: position.lng }}
+                          radius={position.accuracy || 50}
+                          options={{ strokeColor: '#2563eb', strokeOpacity: 0.4, strokeWeight: 1, fillColor: '#2563eb', fillOpacity: 0.1 }}
+                        />
+                      </>
+                    )}
+                  </GoogleMap>
+                ) : (
+                  <div className="h-full flex items-center justify-center bg-slate-100 dark:bg-slate-700">
+                    <span className="w-6 h-6 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )
               ) : (
                 /* No coordinates — show a placeholder with a pin-on-map prompt */
                 <div className="h-full bg-slate-100 dark:bg-slate-700 rounded-xl flex flex-col items-center justify-center gap-3 text-slate-400">

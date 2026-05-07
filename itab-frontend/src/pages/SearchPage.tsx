@@ -10,12 +10,11 @@ import { usePropertyStore } from '../store/propertyStore';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { formatCurrency, amenityIcons, DISTRICTS, INSPECTION_FEE } from '../lib/utils';
 import { filterPropertiesForUser } from '../lib/rbac';
-import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
-import L from 'leaflet';
+import { GoogleMap, useJsApiLoader, Marker, InfoWindow, Circle } from '@react-google-maps/api';
 import toast from 'react-hot-toast';
 
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
-L.Icon.Default.mergeOptions({ iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png', iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png' });
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
+const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
 
 export function SearchPage() {
   const navigate = useNavigate();
@@ -35,6 +34,9 @@ export function SearchPage() {
   const [nearMeRadius, setNearMeRadius] = useState(5); // km
   const [nearMeActive, setNearMeActive] = useState(false);
   const [sortBy, setSortBy] = useState<'newest' | 'price_asc' | 'price_desc' | 'largest' | 'nearest'>('newest');
+  const [selectedPropertyId, setSelectedPropertyId] = useState<string | null>(null);
+
+  const { isLoaded } = useJsApiLoader({ googleMapsApiKey: GOOGLE_MAPS_API_KEY });
   // Haversine distance in km
   const haversine = (lat1: number, lng1: number, lat2: number, lng2: number) => {
     const R = 6371;
@@ -204,35 +206,65 @@ export function SearchPage() {
 
       {viewMode === 'map' ? (
         <div className="h-[600px] rounded-2xl overflow-hidden shadow-card border border-slate-100 dark:border-slate-700">
-          <MapContainer center={position ? [position.lat, position.lng] : [0.3476, 32.5825]} zoom={12} style={{ height: '100%', width: '100%' }}>
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
-            {/* User location */}
-            {position && (
-              <>
-                <Marker position={[position.lat, position.lng]}
-                  icon={L.divIcon({ className: '', html: `<div style="width:20px;height:20px;background:#2563eb;border-radius:50%;border:3px solid white;box-shadow:0 2px 8px rgba(37,99,235,0.5)"></div>`, iconSize: [20, 20], iconAnchor: [10, 10] })}>
-                  <Popup><strong>📍 You are here</strong><br /><span style={{fontSize:'11px'}}>{position.address}</span></Popup>
-                </Marker>
-                {nearMeActive && (
-                  <Circle center={[position.lat, position.lng]} radius={nearMeRadius * 1000}
-                    pathOptions={{ color: '#2563eb', fillColor: '#2563eb', fillOpacity: 0.08, weight: 2, dashArray: '6 4' }} />
-                )}
-              </>
-            )}
-            {sorted.map(p => (
-              <Marker key={p.id} position={[p.latitude, p.longitude]}>
-                <Popup>
-                  <div className="min-w-[200px]">
-                    <img src={p.photos[0]} alt={p.title} className="w-full h-24 object-cover rounded-lg mb-2" />
-                    <p className="font-bold text-sm">{p.title}</p>
-                    <p className="text-xs text-slate-500">{p.address}</p>
-                    <p className="font-bold text-primary-600 mt-1">{formatCurrency(p.rentPrice)}/mo</p>
-                    <button onClick={() => navigate(`/properties/${p.id}`)} className="mt-2 w-full bg-primary-600 text-white text-xs py-1.5 rounded-lg font-medium">View Details</button>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MapContainer>
+          {isLoaded ? (
+            <GoogleMap
+              mapContainerStyle={MAP_CONTAINER_STYLE}
+              center={position ? { lat: position.lat, lng: position.lng } : { lat: 0.3476, lng: 32.5825 }}
+              zoom={12}
+              options={{ streetViewControl: false, mapTypeControl: false }}
+            >
+              {/* User location */}
+              {position && (
+                <>
+                  <Marker
+                    position={{ lat: position.lat, lng: position.lng }}
+                    icon={{ path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#2563eb', fillOpacity: 1, strokeColor: 'white', strokeWeight: 2 }}
+                  />
+                  {nearMeActive && (
+                    <Circle
+                      center={{ lat: position.lat, lng: position.lng }}
+                      radius={nearMeRadius * 1000}
+                      options={{ strokeColor: '#2563eb', strokeOpacity: 0.6, strokeWeight: 2, fillColor: '#2563eb', fillOpacity: 0.08 }}
+                    />
+                  )}
+                </>
+              )}
+              {/* Property markers */}
+              {sorted.map(p => (
+                <Marker
+                  key={p.id}
+                  position={{ lat: p.latitude, lng: p.longitude }}
+                  onClick={() => setSelectedPropertyId(p.id)}
+                />
+              ))}
+              {/* Info window for selected property */}
+              {selectedPropertyId && (() => {
+                const p = sorted.find(x => x.id === selectedPropertyId);
+                if (!p) return null;
+                return (
+                  <InfoWindow
+                    position={{ lat: p.latitude, lng: p.longitude }}
+                    onCloseClick={() => setSelectedPropertyId(null)}
+                  >
+                    <div style={{ minWidth: 200 }}>
+                      {p.photos[0] && <img src={p.photos[0]} alt={p.title} style={{ width: '100%', height: 80, objectFit: 'cover', borderRadius: 8, marginBottom: 6 }} />}
+                      <p style={{ fontWeight: 700, fontSize: 13 }}>{p.title}</p>
+                      <p style={{ fontSize: 11, color: '#64748b' }}>{p.address}</p>
+                      <p style={{ fontWeight: 700, color: '#2563eb', marginTop: 4 }}>{formatCurrency(p.rentPrice)}/mo</p>
+                      <button onClick={() => navigate(`/properties/${p.id}`)}
+                        style={{ marginTop: 8, width: '100%', background: '#2563eb', color: 'white', fontSize: 12, padding: '6px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 600 }}>
+                        View Details
+                      </button>
+                    </div>
+                  </InfoWindow>
+                );
+              })()}
+            </GoogleMap>
+          ) : (
+            <div className="h-full flex items-center justify-center bg-slate-100 dark:bg-slate-800">
+              <span className="w-8 h-8 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">

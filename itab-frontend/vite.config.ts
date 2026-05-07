@@ -22,11 +22,11 @@ export default defineConfig({
         // Network-first for API, cache-first for static assets
         runtimeCaching: [
           {
-            // OpenStreetMap tiles — cache for 7 days
-            urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
+            // Google Maps tiles — cache for 7 days
+            urlPattern: /^https:\/\/maps\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'osm-tiles',
+              cacheName: 'google-maps-tiles',
               expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 60 * 60 },
               cacheableResponse: { statuses: [0, 200] },
             },
@@ -113,7 +113,7 @@ export default defineConfig({
           if (id.includes('node_modules')) {
             if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) return 'vendor';
             if (id.includes('framer-motion') || id.includes('lucide-react')) return 'ui';
-            if (id.includes('leaflet')) return 'map';
+            if (id.includes('@react-google-maps') || id.includes('google-maps')) return 'map';
             if (id.includes('@tanstack') || id.includes('axios')) return 'query';
             if (id.includes('react-hook-form') || id.includes('zod')) return 'forms';
             if (id.includes('zustand')) return 'store';
