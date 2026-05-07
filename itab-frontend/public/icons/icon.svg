@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#2563eb"/>
+  <!-- Building icon -->
+  <rect x="96" y="160" width="320" height="280" rx="12" fill="white" opacity="0.15"/>
+  <rect x="116" y="180" width="280" height="240" rx="8" fill="white" opacity="0.9"/>
+  <!-- Windows -->
+  <rect x="148" y="220" width="60" height="50" rx="6" fill="#2563eb"/>
+  <rect x="228" y="220" width="60" height="50" rx="6" fill="#2563eb"/>
+  <rect x="308" y="220" width="60" height="50" rx="6" fill="#2563eb"/>
+  <rect x="148" y="290" width="60" height="50" rx="6" fill="#2563eb"/>
+  <rect x="308" y="290" width="60" height="50" rx="6" fill="#2563eb"/>
+  <!-- Door -->
+  <rect x="216" y="310" width="84" height="110" rx="8" fill="#1d4ed8"/>
+  <!-- Roof triangle -->
+  <polygon points="256,72 76,200 436,200" fill="#1d4ed8"/>
+  <polygon points="256,96 96,200 416,200" fill="#2563eb"/>
+  <!-- Chimney -->
+  <rect x="320" y="100" width="32" height="60" rx="4" fill="#1e40af"/>
+</svg>
