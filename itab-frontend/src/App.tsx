@@ -13,6 +13,8 @@ import { mockNotifications } from './lib/mockData';
 import { routeRoles } from './lib/rbac';
 
 // Lazy-loaded pages
+const LandingPage      = lazy(() => import('./pages/LandingPage').then(m => ({ default: m.LandingPage })));
+const PublicPropertyPage = lazy(() => import('./pages/PublicPropertyPage').then(m => ({ default: m.PublicPropertyPage })));
 const LoginPage       = lazy(() => import('./pages/auth/LoginPage').then(m => ({ default: m.LoginPage })));
 const RegisterPage    = lazy(() => import('./pages/auth/RegisterPage').then(m => ({ default: m.RegisterPage })));
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage').then(m => ({ default: m.ForgotPasswordPage })));
@@ -75,6 +77,12 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// Authenticated users go to dashboard; guests see the landing page
+function LandingOrDashboard() {
+  const { isAuthenticated } = useAuthStore();
+  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+  return <LandingPage />;
+}
 export default function App() {
   const { theme } = useUIStore();
   const { setNotifications } = useNotificationStore();
@@ -105,6 +113,10 @@ export default function App() {
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900"><PageLoader /></div>}>
           <Routes>
+            {/* ── Public routes (no auth needed) ── */}
+            <Route path="/"              element={<LandingOrDashboard />} />
+            <Route path="/browse/:id"    element={<PublicPropertyPage />} />
+
             {/* Public auth routes */}
             <Route path="/login"           element={<PublicRoute><LoginPage /></PublicRoute>} />
             <Route path="/register"        element={<PublicRoute><RegisterPage /></PublicRoute>} />
@@ -112,7 +124,6 @@ export default function App() {
 
             {/* Protected app routes */}
             <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-              <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard"        element={<DashboardPage />} />
               <Route path="/properties"       element={<PropertiesPage />} />
               <Route path="/properties/:id"   element={<PropertyDetailPage />} />
@@ -151,7 +162,7 @@ export default function App() {
             </Route>
 
             {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </BrowserRouter>
