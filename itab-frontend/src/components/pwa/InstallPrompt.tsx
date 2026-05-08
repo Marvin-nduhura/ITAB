@@ -75,9 +75,7 @@ export function InstallPrompt() {
             <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card-lg border border-slate-200 dark:border-slate-700 p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Download size={15} className="text-white" />
-                  </div>
+                  <img src="/logo.png" alt="ITAB" className="w-8 h-8 object-contain rounded-lg" />
                   <p className="font-bold text-slate-900 dark:text-slate-100 text-sm">Install ITAB</p>
                 </div>
                 <button onClick={handleDismiss} className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">

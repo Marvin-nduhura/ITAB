@@ -1,10 +1,10 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LayoutDashboard, Building2, Search, Calendar, CreditCard, Wrench,
+  LayoutDashboard, Search, Calendar, CreditCard, Wrench,
   Users, BarChart3, MessageSquare, Bell, Settings, LogOut, X,
   Home, DollarSign, FileText, Star, Briefcase,
-  Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen,
+  Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen, Building2,
 } from 'lucide-react';import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
 import { Avatar } from '../ui/Avatar';
@@ -98,9 +98,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex items-center justify-between px-4 py-5 border-b border-slate-200 dark:border-slate-700">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-primary-600 rounded-xl flex items-center justify-center">
-            <Building2 className="w-5 h-5 text-white" />
-          </div>
+          <img src="/logo.png" alt="ITAB" className="h-9 w-auto object-contain" />
           <div>
             <p className="font-bold text-slate-900 dark:text-slate-100 text-sm leading-tight">ITAB</p>
             <p className="text-xs text-slate-400 leading-tight">Property Services</p>

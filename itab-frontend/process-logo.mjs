@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const src = resolve(__dirname, '../logo.jpeg');
+const src = resolve(__dirname, '../logo no background.png');
 const iconsDir = resolve(__dirname, 'public/icons');
 const publicDir = resolve(__dirname, 'public');
 

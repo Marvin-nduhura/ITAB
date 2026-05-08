@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Building2, Eye, EyeOff, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle2, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGoogleLogin } from '@react-oauth/google';
 import { Button } from '../../components/ui/Button';
@@ -177,8 +177,8 @@ export function RegisterPage() {
 
           {/* Logo */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-2xl shadow-glow mb-4">
-              <Building2 className="w-8 h-8 text-white" />
+            <div className="inline-flex items-center justify-center mb-4">
+              <img src="/logo.png" alt="ITAB" className="h-16 w-auto object-contain" />
             </div>
             <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">ITAB Property Services</h1>
             <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm">Uganda's premier property platform</p>

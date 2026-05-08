@@ -55,6 +55,8 @@ export function Header() {
           <button onClick={toggleSidebar} className="lg:hidden p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
             <Menu size={20} className="text-slate-600 dark:text-slate-400" />
           </button>
+          {/* Logo — visible on mobile only (sidebar hidden) */}
+          <img src="/logo.png" alt="ITAB" className="h-8 w-auto object-contain lg:hidden" />
           <button onClick={() => navigate('/search')} className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 text-sm hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors w-48">
             <Search size={15} />
             <span>Search properties...</span>
