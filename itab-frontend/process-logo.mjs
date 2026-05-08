@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const src = resolve(__dirname, '../logo no background.png');
+const src = resolve(__dirname, '../logo.jpeg');
 const iconsDir = resolve(__dirname, 'public/icons');
 const publicDir = resolve(__dirname, 'public');
 
@@ -51,12 +51,12 @@ async function run() {
   writeFileSync(join(publicDir, 'favicon.svg'), svgContent);
   console.log('✓ icon.svg + favicon.svg');
 
-  // logo.png for use in the app UI (transparent background, 400px)
+  // logo.png for use in the app UI (blue background, 400px)
   await sharp(src)
-    .resize(400, 200, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
+    .resize(400, 200, { fit: 'contain', background: BG })
     .png()
     .toFile(join(publicDir, 'logo.png'));
-  console.log('✓ logo.png (transparent, for UI use)');
+  console.log('✓ logo.png (blue bg, for UI use)');
 
   // logo-white.png (white background version for dark contexts)
   await sharp(src)
