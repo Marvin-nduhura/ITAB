@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Search, Calendar, CreditCard, Wrench,
   Users, BarChart3, MessageSquare, Bell, Settings, LogOut, X,
   Home, DollarSign, FileText, Star, Briefcase,
-  Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen, Building2,
+  Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen, Building2, Shield,
 } from 'lucide-react';import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
 import { Avatar } from '../ui/Avatar';
@@ -34,6 +34,8 @@ const navItems: NavItem[] = [
   { to: '/admin/unassigned',   icon: <UserCheck size={18} />,       label: 'Unassigned Properties',roles: ['admin'] },
   { to: '/admin/disputes',     icon: <Scale size={18} />,           label: 'Disputes',             roles: ['admin'] },
   { to: '/admin/announcements',icon: <Megaphone size={18} />,       label: 'Announcements',        roles: ['admin'] },
+  { to: '/admin/agents',       icon: <Briefcase size={18} />,       label: 'Agent Applications',   roles: ['admin'] },
+  { to: '/admin/audit',        icon: <Shield size={18} />,          label: 'Audit Logs',           roles: ['admin'] },
   { to: '/vendors',            icon: <Briefcase size={18} />,       label: 'Vendors',              roles: ['admin'] },
   { to: '/analytics',          icon: <BarChart3 size={18} />,       label: 'Analytics',            roles: ['admin'] },
 
@@ -79,6 +81,9 @@ const navItems: NavItem[] = [
 
   // ── Documents (all roles) ─────────────────────────────────────────────
   { to: '/documents',     icon: <FolderOpen size={18} />,      label: 'Documents',           roles: ['admin', 'property_manager', 'landlord', 'tenant', 'agent', 'vendor'] },
+
+  // ── Disputes (all roles can raise) ────────────────────────────────────
+  { to: '/disputes',      icon: <Scale size={18} />,           label: 'My Disputes',         roles: ['property_manager', 'landlord', 'tenant', 'agent', 'vendor'] },
 ];
 
 export function Sidebar() {

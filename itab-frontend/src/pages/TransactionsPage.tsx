@@ -7,7 +7,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowRight, Download, TrendingUp, DollarSign,
-  Building2, Wrench, Receipt, X, Info,
+  Building2, Wrench, Receipt, X, Info, RefreshCw, RotateCcw,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -17,8 +17,10 @@ import { Avatar } from '../components/ui/Avatar';
 import { Select } from '../components/ui/Input';
 import { useAuthStore } from '../store/authStore';
 import { usePaymentStore } from '../store/paymentStore';
+import { useUserStore } from '../store/userStore';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { downloadCSV } from '../lib/download';
+import toast from 'react-hot-toast';
 import type { PlatformTransaction, TransactionType } from '../types';
 
 // ─── Transaction type config ──────────────────────────────────────────────────
@@ -36,11 +38,41 @@ const txTypeConfig: Record<TransactionType, { label: string; icon: React.ReactNo
 };
 
 // ─── Transaction row ──────────────────────────────────────────────────────────
-function TransactionRow({ tx, currentUserId }: { tx: PlatformTransaction; currentUserId: string }) {
+function TransactionRow({ tx, currentUserId, isAdmin }: { tx: PlatformTransaction; currentUserId: string; isAdmin: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const { retryTransaction, refundTransaction } = usePaymentStore();
+  const { addAuditLog } = useUserStore();
   const cfg = txTypeConfig[tx.type];
   const isReceiving = tx.receiverId === currentUserId;
   const isSending = tx.senderId === currentUserId;
+
+  const handleRetry = () => {
+    retryTransaction(tx.id);
+    addAuditLog({
+      action: 'transaction_retried',
+      performedBy: currentUserId,
+      performedByName: 'Admin',
+      performedByRole: 'admin',
+      targetId: tx.id,
+      targetName: tx.reference,
+      description: `Retried failed transaction ${tx.reference} (${formatCurrency(tx.amount)})`,
+    });
+    toast.success(`Transaction ${tx.reference} retried successfully`);
+  };
+
+  const handleRefund = () => {
+    refundTransaction(tx.id);
+    addAuditLog({
+      action: 'transaction_refunded',
+      performedBy: currentUserId,
+      performedByName: 'Admin',
+      performedByRole: 'admin',
+      targetId: tx.id,
+      targetName: tx.reference,
+      description: `Refunded transaction ${tx.reference} (${formatCurrency(tx.amount)}) to ${tx.senderName}`,
+    });
+    toast.success(`Refund of ${formatCurrency(tx.amount)} issued to ${tx.senderName}`);
+  };
 
   return (
     <motion.div
@@ -78,9 +110,29 @@ function TransactionRow({ tx, currentUserId }: { tx: PlatformTransaction; curren
             {isReceiving ? '+' : isSending ? '-' : ''}{formatCurrency(tx.amount)}
           </p>
           <p className="text-xs text-slate-400">{formatDate(tx.createdAt)}</p>
-          <Badge variant={tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : 'yellow'} className="mt-0.5">
+          <Badge variant={tx.status === 'completed' ? 'green' : tx.status === 'failed' ? 'red' : tx.status === 'refunded' ? 'purple' : 'yellow'} className="mt-0.5">
             {tx.status}
           </Badge>
+          {/* Admin actions for failed transactions */}
+          {isAdmin && tx.status === 'failed' && (
+            <div className="flex gap-1 mt-1 justify-end">
+              <button onClick={e => { e.stopPropagation(); handleRetry(); }}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium hover:bg-blue-200 transition-colors">
+                <RefreshCw size={10} /> Retry
+              </button>
+              <button onClick={e => { e.stopPropagation(); handleRefund(); }}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 text-xs font-medium hover:bg-purple-200 transition-colors">
+                <RotateCcw size={10} /> Refund
+              </button>
+            </div>
+          )}
+          {/* Admin can also refund completed transactions */}
+          {isAdmin && tx.status === 'completed' && (
+            <button onClick={e => { e.stopPropagation(); handleRefund(); }}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400 text-xs font-medium hover:bg-slate-200 transition-colors mt-1">
+              <RotateCcw size={10} /> Refund
+            </button>
+          )}
         </div>
       </div>
 
@@ -139,6 +191,7 @@ function TransactionRow({ tx, currentUserId }: { tx: PlatformTransaction; curren
 export function TransactionsPage() {
   const { user } = useAuthStore();
   const { transactions, getPlatformRevenue, getTransactionsByUser } = usePaymentStore();
+  const isAdminUser = user?.role === 'admin';
   const [filterType, setFilterType] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
 
@@ -239,7 +292,7 @@ export function TransactionsPage() {
               { value: 'vendor_contract', label: 'Contract Payments' },
             ]} />
           <Select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-            options={[{ value: '', label: 'All Status' }, { value: 'completed', label: 'Completed' }, { value: 'pending', label: 'Pending' }, { value: 'failed', label: 'Failed' }]} />
+            options={[{ value: '', label: 'All Status' }, { value: 'completed', label: 'Completed' }, { value: 'pending', label: 'Pending' }, { value: 'failed', label: 'Failed' }, { value: 'refunded', label: 'Refunded' }]} />
           {(filterType || filterStatus) && (
             <Button variant="ghost" size="sm" icon={<X size={14} />} onClick={() => { setFilterType(''); setFilterStatus(''); }}>Clear</Button>
           )}
@@ -255,7 +308,7 @@ export function TransactionsPage() {
         <div className="space-y-2">
           {filtered.map((tx, i) => (
             <motion.div key={tx.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}>
-              <TransactionRow tx={tx} currentUserId={user?.id || ''} />
+              <TransactionRow tx={tx} currentUserId={user?.id || ''} isAdmin={isAdminUser} />
             </motion.div>
           ))}
         </div>

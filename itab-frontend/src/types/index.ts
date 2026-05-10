@@ -472,3 +472,41 @@ export interface ApiError {
   code?: string;
   errors?: Record<string, string[]>;
 }
+
+// ─── Dispute ─────────────────────────────────────────────────────────────────
+export type DisputeType =
+  | 'management_fee'
+  | 'payout_amount'
+  | 'property_condition'
+  | 'lease_terms'
+  | 'payment_dispute'
+  | 'harassment'
+  | 'fraud'
+  | 'other';
+
+export type DisputeStatus = 'open' | 'under_review' | 'resolved' | 'dismissed';
+
+export interface Dispute {
+  id: string;
+  type: DisputeType;
+  status: DisputeStatus;
+  raisedById: string;
+  raisedByName: string;
+  raisedByRole: string;
+  againstId?: string;
+  againstName?: string;
+  againstRole?: string;
+  propertyId?: string;
+  propertyTitle?: string;
+  transactionId?: string;
+  subject: string;
+  description: string;
+  evidence?: string;        // description of evidence
+  amount?: number;
+  resolution?: string;
+  resolvedById?: string;
+  resolvedByName?: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string;
+}

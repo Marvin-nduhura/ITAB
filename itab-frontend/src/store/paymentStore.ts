@@ -75,6 +75,10 @@ interface PaymentStore {
   getPlatformRevenue: () => number;
   getContractsByVendor: (vendorId: string) => VendorContract[];
   getContractsByProperty: (propertyId: string) => VendorContract[];
+
+  // Admin actions
+  retryTransaction: (id: string) => void;
+  refundTransaction: (id: string) => void;
 }
 
 function makeRef(prefix: string): string {
@@ -372,6 +376,34 @@ export const usePaymentStore = create<PaymentStore>()(
 
       getContractsByProperty: (propertyId) =>
         get().contracts.filter(c => c.propertyId === propertyId),
+
+      retryTransaction: (id) => {
+        set(s => ({
+          transactions: s.transactions.map(t =>
+            t.id === id && t.status === 'failed'
+              ? { ...t, status: 'completed', processedAt: new Date().toISOString(), failureReason: undefined }
+              : t
+          ),
+        }));
+      },
+
+      refundTransaction: (id) => {
+        const tx = get().transactions.find(t => t.id === id);
+        if (!tx) return;
+        const refundTx = makeTx(
+          'refund',
+          { id: tx.receiverId, name: tx.receiverName, role: tx.receiverRole, method: tx.receiverMethod },
+          { id: tx.senderId, name: tx.senderName, role: tx.senderRole, method: tx.senderMethod, phone: tx.senderPhone },
+          tx.amount,
+          `Refund for transaction ${tx.reference}`,
+          { propertyId: tx.propertyId, propertyTitle: tx.propertyTitle }
+        );
+        set(s => ({
+          transactions: [refundTx, ...s.transactions.map(t =>
+            t.id === id ? { ...t, status: 'refunded' as const } : t
+          )],
+        }));
+      },
     }),
     {
       name: 'itab_payments',

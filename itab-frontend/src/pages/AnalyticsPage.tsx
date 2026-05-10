@@ -1,10 +1,13 @@
 import { motion } from 'framer-motion';
-import { TrendingUp, Building2, DollarSign, Calendar } from 'lucide-react';
+import { TrendingUp, Building2, DollarSign, Calendar, Users, Scale, Receipt, AlertCircle } from 'lucide-react';
 import { StatCard } from '../components/ui/Card';
 import { mockDashboardStats } from '../lib/mockData';
 import { formatCurrency } from '../lib/utils';
 import { useAuthStore } from '../store/authStore';
 import { usePropertyStore } from '../store/propertyStore';
+import { useUserStore } from '../store/userStore';
+import { usePaymentStore } from '../store/paymentStore';
+import { useDisputeStore } from '../store/disputeStore';
 import { filterPropertiesForUser } from '../lib/rbac';
 
 // Simple bar chart component
@@ -29,6 +32,11 @@ function BarChart({ data, label }: { data: { label: string; value: number; color
 export function AnalyticsPage() {
   const { user } = useAuthStore();
   const { properties: allProperties } = usePropertyStore();
+  const { users } = useUserStore();
+  const { transactions, getPlatformRevenue } = usePaymentStore();
+  const { disputes } = useDisputeStore();
+  const isAdmin = user?.role === 'admin';
+
   // Scope analytics to properties this user manages/owns
   const properties = filterPropertiesForUser(allProperties, user);
   const stats = {
@@ -37,6 +45,13 @@ export function AnalyticsPage() {
     vacantProperties: properties.filter(p => p.status === 'published').length,
     occupiedProperties: properties.filter(p => p.status === 'rented').length,
   };
+
+  const platformRevenue = getPlatformRevenue();
+  const totalTransactionVolume = transactions.filter(t => t.type === 'rent_payment' && t.status === 'completed').reduce((s, t) => s + t.amount, 0);
+  const failedTransactions = transactions.filter(t => t.status === 'failed').length;
+  const openDisputes = disputes.filter(d => d.status === 'open' || d.status === 'under_review').length;
+  const activeUsers = users.filter(u => !u.isSuspended).length;
+  const pendingKYC = users.filter(u => u.kycStatus === 'submitted').length;
 
   const monthlyRevenue = [
     { label: 'Oct', value: 2800000, color: '#3b82f6' },
@@ -72,10 +87,61 @@ export function AnalyticsPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard title="Total Revenue" value={formatCurrency(stats.monthlyRevenue)} icon={<DollarSign className="w-6 h-6 text-green-600" />} iconBg="bg-green-100 dark:bg-green-900/30" trend={{ value: 8, label: 'vs last month' }} />
-        <StatCard title="Occupancy Rate" value={`${Math.round((stats.occupiedProperties / stats.totalProperties) * 100)}%`} icon={<Building2 className="w-6 h-6 text-primary-600" />} iconBg="bg-primary-100 dark:bg-primary-900/30" trend={{ value: 3, label: 'vs last month' }} />
+        <StatCard title="Occupancy Rate" value={`${Math.round((stats.occupiedProperties / (stats.totalProperties || 1)) * 100)}%`} icon={<Building2 className="w-6 h-6 text-primary-600" />} iconBg="bg-primary-100 dark:bg-primary-900/30" trend={{ value: 3, label: 'vs last month' }} />
         <StatCard title="Conversion Rate" value={`${stats.conversionRate}%`} subtitle="Guest → Tenant" icon={<TrendingUp className="w-6 h-6 text-purple-600" />} iconBg="bg-purple-100 dark:bg-purple-900/30" />
         <StatCard title="Inspection Revenue" value={formatCurrency(stats.inspectionFeeRevenue)} icon={<Calendar className="w-6 h-6 text-gold-500" />} iconBg="bg-yellow-100 dark:bg-yellow-900/30" />
       </div>
+
+      {/* Admin-only platform-wide stats */}
+      {isAdmin && (
+        <div className="space-y-4">
+          <h2 className="font-bold text-slate-900 dark:text-slate-100">Platform-Wide Overview</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard title="Platform Revenue" value={formatCurrency(platformRevenue)} subtitle="ITAB fees collected" icon={<Receipt className="w-6 h-6 text-primary-600" />} iconBg="bg-primary-100 dark:bg-primary-900/30" />
+            <StatCard title="Transaction Volume" value={formatCurrency(totalTransactionVolume)} subtitle="Total rent processed" icon={<DollarSign className="w-6 h-6 text-green-600" />} iconBg="bg-green-100 dark:bg-green-900/30" />
+            <StatCard title="Active Users" value={activeUsers} subtitle={`${pendingKYC} pending KYC`} icon={<Users className="w-6 h-6 text-blue-600" />} iconBg="bg-blue-100 dark:bg-blue-900/30" />
+            <StatCard title="Open Disputes" value={openDisputes} subtitle={failedTransactions > 0 ? `${failedTransactions} failed txns` : 'All transactions OK'} icon={<Scale className="w-6 h-6 text-red-500" />} iconBg="bg-red-100 dark:bg-red-900/30" />
+          </div>
+
+          {/* User breakdown */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-5">
+            <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-4">Users by Role</h3>
+            <div className="space-y-3">
+              {(['admin', 'property_manager', 'landlord', 'tenant', 'agent', 'vendor'] as const).map(role => {
+                const count = users.filter(u => u.role === role).length;
+                const suspended = users.filter(u => u.role === role && u.isSuspended).length;
+                const colors: Record<string, string> = {
+                  admin: 'bg-red-500', property_manager: 'bg-purple-500', landlord: 'bg-blue-500',
+                  tenant: 'bg-green-500', agent: 'bg-yellow-500', vendor: 'bg-orange-500',
+                };
+                return (
+                  <div key={role} className="flex items-center gap-3">
+                    <div className={`w-3 h-3 rounded-full ${colors[role]} flex-shrink-0`} />
+                    <p className="text-sm text-slate-700 dark:text-slate-300 w-36 capitalize">{role.replace('_', ' ')}</p>
+                    <div className="flex-1 bg-slate-100 dark:bg-slate-700 rounded-full h-2">
+                      <motion.div initial={{ width: 0 }} animate={{ width: `${(count / (users.length || 1)) * 100}%` }} transition={{ duration: 0.6 }}
+                        className={`h-full rounded-full ${colors[role]}`} />
+                    </div>
+                    <p className="text-sm font-bold text-slate-900 dark:text-slate-100 w-8 text-right">{count}</p>
+                    {suspended > 0 && <p className="text-xs text-red-500">({suspended} suspended)</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Failed transactions alert */}
+          {failedTransactions > 0 && (
+            <div className="flex items-start gap-3 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl">
+              <AlertCircle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="font-semibold text-red-800 dark:text-red-300 text-sm">{failedTransactions} failed transaction{failedTransactions !== 1 ? 's' : ''} need attention</p>
+                <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">Go to Transactions page, filter by "Failed" to retry or refund them.</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

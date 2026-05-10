@@ -15,6 +15,9 @@ import { routeRoles } from './lib/rbac';
 // Lazy-loaded pages
 const LandingPage      = lazy(() => import('./pages/LandingPage').then(m => ({ default: m.LandingPage })));
 const PublicPropertyPage = lazy(() => import('./pages/PublicPropertyPage').then(m => ({ default: m.PublicPropertyPage })));
+const RaiseDisputePage = lazy(() => import('./pages/RaiseDisputePage').then(m => ({ default: m.RaiseDisputePage })));
+const AuditLogsPage    = lazy(() => import('./pages/admin/AuditLogsPage').then(m => ({ default: m.AuditLogsPage })));
+const AgentApplicationsPage = lazy(() => import('./pages/admin/AgentApplicationsPage').then(m => ({ default: m.AgentApplicationsPage })));
 const LoginPage       = lazy(() => import('./pages/auth/LoginPage').then(m => ({ default: m.LoginPage })));
 const RegisterPage    = lazy(() => import('./pages/auth/RegisterPage').then(m => ({ default: m.RegisterPage })));
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage').then(m => ({ default: m.ForgotPasswordPage })));
@@ -148,6 +151,8 @@ export default function App() {
               <Route path="/admin/announcements"  element={<RoleRoute path="/admin/announcements"><AdminAnnouncements /></RoleRoute>} />
               <Route path="/admin/unassigned"     element={<RoleRoute path="/admin/unassigned"><UnassignedProperties /></RoleRoute>} />
               <Route path="/admin/vetting"        element={<RoleRoute path="/admin/vetting"><VettingQueue /></RoleRoute>} />
+              <Route path="/admin/audit"          element={<RoleRoute path="/admin/audit"><AuditLogsPage /></RoleRoute>} />
+              <Route path="/admin/agents"         element={<RoleRoute path="/admin/agents"><AgentApplicationsPage /></RoleRoute>} />
               <Route path="/vendors"              element={<RoleRoute path="/vendors"><VendorsPage /></RoleRoute>} />
               <Route path="/vendor"               element={<RoleRoute path="/vendor"><VendorPortal /></RoleRoute>} />
               <Route path="/vendor/profile"       element={<RoleRoute path="/vendor/profile"><VendorPortal /></RoleRoute>} />
@@ -159,6 +164,7 @@ export default function App() {
               <Route path="/tools"                element={<GuestPage />} />
               <Route path="/notices"              element={<RoleRoute path="/notices"><NoticesPage /></RoleRoute>} />
               <Route path="/documents"            element={<RoleRoute path="/documents"><DocumentsPage /></RoleRoute>} />
+              <Route path="/disputes"             element={<RaiseDisputePage />} />
             </Route>
 
             {/* Catch-all */}
