@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Wrench, Plus, AlertCircle, Clock, CheckCircle2, UserCheck, Star, Phone } from 'lucide-react';
+import { Wrench, Plus, AlertCircle, Clock, CheckCircle2, UserCheck, Star, Phone, RotateCcw, XCircle, ArrowLeft } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -12,7 +12,7 @@ import { useAuthStore } from '../store/authStore';
 import { useVendorStore } from '../store/vendorStore';
 import { mockMaintenance } from '../lib/mockData';
 import { formatDate, formatCurrency, maintenanceStatusConfig } from '../lib/utils';
-import { filterMaintenanceForUser } from '../lib/rbac';
+import { filterMaintenanceForUser, canDo } from '../lib/rbac';
 import type { MaintenanceRequest, VendorCategory } from '../types';
 import toast from 'react-hot-toast';
 
@@ -34,8 +34,8 @@ export function MaintenancePage() {
   const [showAssignModal, setShowAssignModal] = useState<MaintenanceRequest | null>(null);
   const [showCompleteModal, setShowCompleteModal] = useState<MaintenanceRequest | null>(null);
   const [showRateModal, setShowRateModal] = useState<{ request: MaintenanceRequest; jobId: string; vendorId: string; vendorName: string } | null>(null);
+  const [showRevertModal, setShowRevertModal] = useState<{ request: MaintenanceRequest; targetStatus: MaintenanceRequest['status']; label: string } | null>(null);
   const [loading, setLoading] = useState(false);
-
   // New request form
   const [form, setForm] = useState({ title: '', description: '', priority: 'normal' });
   const [photos, setPhotos] = useState<UploadedFile[]>([]);
@@ -156,6 +156,45 @@ export function MaintenancePage() {
     toast.success('Vendor rated! Thank you for your feedback.');
   };
 
+  // Revert a status change — moves request back to a previous state
+  const handleRevert = () => {
+    if (!showRevertModal) return;
+    const { request, targetStatus, label } = showRevertModal;
+    setRequests(prev => prev.map(r =>
+      r.id === request.id
+        ? { ...r, status: targetStatus, completedAt: undefined, actualCost: undefined }
+        : r
+    ));
+    setShowRevertModal(null);
+    toast(`↩️ "${request.title}" reverted to ${label}`, { duration: 3000 });
+  };
+
+  // Quick status change with toast undo
+  const changeStatus = (id: string, newStatus: MaintenanceRequest['status'], label: string) => {
+    const prev = requests.find(r => r.id === id);
+    if (!prev) return;
+    const prevStatus = prev.status;
+    setRequests(r => r.map(req => req.id === id ? { ...req, status: newStatus } : req));
+    toast(
+      (t) => (
+        <span className="flex items-center gap-3">
+          <span>Marked as <strong>{label}</strong></span>
+          <button
+            onClick={() => {
+              setRequests(r => r.map(req => req.id === id ? { ...req, status: prevStatus } : req));
+              toast.dismiss(t.id);
+              toast(`↩️ Reverted back to ${maintenanceStatusConfig[prevStatus]?.label || prevStatus}`);
+            }}
+            className="px-2 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-xs font-semibold border border-white/30 transition-colors"
+          >
+            Undo
+          </button>
+        </span>
+      ),
+      { duration: 6000, icon: '✅' }
+    );
+  };
+
   const availableVendors = vendors.filter(v =>
     v.isActive && !v.isSuspended &&
     (!vendorCategoryFilter || v.category === vendorCategoryFilter)
@@ -168,10 +207,9 @@ export function MaintenancePage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Maintenance</h1>
           <p className="text-sm text-slate-500 mt-0.5">{requests.length} requests</p>
         </div>
-        {user?.role === 'tenant' && (
+        {canDo.submitMaintenance(user) && (
           <Button icon={<Plus size={16} />} onClick={() => setShowNewModal(true)}>New Request</Button>
-        )}
-      </div>
+        )}      </div>
 
       {/* Status summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -189,7 +227,7 @@ export function MaintenancePage() {
       </div>
 
       {requests.length === 0 ? (
-        <EmptyState icon={<Wrench size={28} />} title="No maintenance requests" description="Submit a request when something needs fixing." action={<Button onClick={() => setShowNewModal(true)}>New Request</Button>} />
+        <EmptyState icon={<Wrench size={28} />} title="No maintenance requests" description="Submit a request when something needs fixing." action={canDo.submitMaintenance(user) ? <Button onClick={() => setShowNewModal(true)}>New Request</Button> : undefined} />
       ) : (
         <div className="space-y-3">
           {requests.map((m, i) => (
@@ -236,32 +274,69 @@ export function MaintenancePage() {
                 </div>
               </div>
 
-              {/* Manager actions */}
-              {user?.role === 'property_manager' && (
-                <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex gap-2 flex-wrap">
+              {/* Manager / Admin / Landlord actions */}
+              {canDo.manageMaintenance(user) && (
+                <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex gap-2 flex-wrap items-center">
+
+                  {/* submitted → assign vendor */}
                   {m.status === 'submitted' && (
                     <Button size="sm" icon={<UserCheck size={13} />} onClick={() => setShowAssignModal(m)}>
                       Assign Vendor
                     </Button>
                   )}
-                  {(m.status === 'assigned' || m.status === 'in_progress') && (
-                    <>
-                      <Button size="sm" variant="secondary" onClick={() => {
-                        setRequests(prev => prev.map(r => r.id === m.id ? { ...r, status: 'in_progress' } : r));
-                        toast.success('Marked as in progress');
-                      }}>
-                        Mark In Progress
-                      </Button>
-                      <Button size="sm" icon={<CheckCircle2 size={13} />} onClick={() => setShowCompleteModal(m)}>
-                        Mark Complete
-                      </Button>
-                    </>
+
+                  {/* submitted / assigned → mark in progress */}
+                  {(m.status === 'submitted' || m.status === 'assigned') && (
+                    <Button size="sm" variant="secondary" onClick={() => changeStatus(m.id, 'in_progress', 'In Progress')}>
+                      Mark In Progress
+                    </Button>
                   )}
-                  {m.status === 'submitted' && (
-                    <Button size="sm" variant="danger" onClick={() => {
-                      setRequests(prev => prev.map(r => r.id === m.id ? { ...r, status: 'cancelled' } : r));
-                      toast('Request cancelled');
-                    }}>Cancel</Button>
+
+                  {/* assigned / in_progress → mark complete */}
+                  {(m.status === 'assigned' || m.status === 'in_progress') && (
+                    <Button size="sm" icon={<CheckCircle2 size={13} />} onClick={() => setShowCompleteModal(m)}>
+                      Mark Complete
+                    </Button>
+                  )}
+
+                  {/* completed → revert to in_progress */}
+                  {m.status === 'completed' && (
+                    <Button size="sm" variant="secondary" icon={<RotateCcw size={13} />}
+                      onClick={() => setShowRevertModal({ request: m, targetStatus: 'in_progress', label: 'In Progress' })}>
+                      Revert to In Progress
+                    </Button>
+                  )}
+
+                  {/* in_progress → revert to assigned */}
+                  {m.status === 'in_progress' && (
+                    <Button size="sm" variant="secondary" icon={<ArrowLeft size={13} />}
+                      onClick={() => setShowRevertModal({ request: m, targetStatus: 'assigned', label: 'Assigned' })}>
+                      Revert to Assigned
+                    </Button>
+                  )}
+
+                  {/* assigned → revert to submitted (unassign) */}
+                  {m.status === 'assigned' && (
+                    <Button size="sm" variant="secondary" icon={<ArrowLeft size={13} />}
+                      onClick={() => setShowRevertModal({ request: m, targetStatus: 'submitted', label: 'Submitted' })}>
+                      Unassign
+                    </Button>
+                  )}
+
+                  {/* submitted / assigned → cancel */}
+                  {(m.status === 'submitted' || m.status === 'assigned') && (
+                    <Button size="sm" variant="danger" icon={<XCircle size={13} />}
+                      onClick={() => setShowRevertModal({ request: m, targetStatus: 'cancelled', label: 'Cancelled' })}>
+                      Cancel
+                    </Button>
+                  )}
+
+                  {/* cancelled → reopen */}
+                  {m.status === 'cancelled' && (
+                    <Button size="sm" variant="secondary" icon={<RotateCcw size={13} />}
+                      onClick={() => changeStatus(m.id, 'submitted', 'Submitted (Reopened)')}>
+                      Reopen
+                    </Button>
                   )}
                 </div>
               )}
@@ -392,6 +467,56 @@ export function MaintenancePage() {
               {['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'][ratingValue]}
             </p>
             <Textarea label="Comment (optional)" placeholder="Tell us about your experience..." value={ratingComment} onChange={e => setRatingComment(e.target.value)} rows={3} />
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Revert / Cancel Confirmation Modal ───────────────────────── */}
+      <Modal
+        open={!!showRevertModal}
+        onClose={() => setShowRevertModal(null)}
+        title={showRevertModal?.targetStatus === 'cancelled' ? 'Cancel Request?' : 'Revert Status?'}
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setShowRevertModal(null)}>Keep Current</Button>
+            <Button
+              variant={showRevertModal?.targetStatus === 'cancelled' ? 'danger' : 'secondary'}
+              icon={showRevertModal?.targetStatus === 'cancelled' ? <XCircle size={14} /> : <RotateCcw size={14} />}
+              onClick={handleRevert}
+            >
+              {showRevertModal?.targetStatus === 'cancelled' ? 'Yes, Cancel' : `Revert to ${showRevertModal?.label}`}
+            </Button>
+          </>
+        }
+      >
+        {showRevertModal && (
+          <div className="space-y-3">
+            <div className={`p-3 rounded-xl border ${showRevertModal.targetStatus === 'cancelled' ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800'}`}>
+              <p className={`text-sm font-semibold ${showRevertModal.targetStatus === 'cancelled' ? 'text-red-800 dark:text-red-300' : 'text-amber-800 dark:text-amber-300'}`}>
+                {showRevertModal.targetStatus === 'cancelled'
+                  ? '⚠️ This will cancel the maintenance request.'
+                  : `↩️ This will move the request back to "${showRevertModal.label}".`}
+              </p>
+              <p className={`text-xs mt-1 ${showRevertModal.targetStatus === 'cancelled' ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                {showRevertModal.targetStatus === 'cancelled'
+                  ? 'The vendor will be notified. You can reopen it later if needed.'
+                  : 'You can always move it forward again. No data will be lost.'}
+              </p>
+            </div>
+            <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{showRevertModal.request.title}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{showRevertModal.request.propertyTitle}</p>
+              <div className="flex items-center gap-2 mt-1.5">
+                <Badge variant={statusVariant(showRevertModal.request.status)}>
+                  {maintenanceStatusConfig[showRevertModal.request.status]?.label}
+                </Badge>
+                <span className="text-xs text-slate-400">→</span>
+                <Badge variant={statusVariant(showRevertModal.targetStatus)}>
+                  {showRevertModal.label}
+                </Badge>
+              </div>
+            </div>
           </div>
         )}
       </Modal>

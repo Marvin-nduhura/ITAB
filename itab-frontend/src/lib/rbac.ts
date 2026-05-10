@@ -73,7 +73,9 @@ export function filterMaintenanceForUser(requests: MaintenanceRequest[], user: U
     case 'admin':
       return requests;
     case 'property_manager':
-      return requests; // manager sees all for their properties (in real app: filter by managerId)
+      return requests; // manager sees all for their properties
+    case 'landlord':
+      return requests; // landlord sees all maintenance on their properties
     case 'tenant':
       return requests.filter(r => r.tenantId === user.id);
     case 'vendor':
@@ -130,14 +132,15 @@ export const canDo = {
   suspendUser:     (u: User | null) => is(u, 'admin'),
   viewAllPayments: (u: User | null) => is(u, 'admin', 'property_manager'),
   processPayouts:  (u: User | null) => is(u, 'admin', 'property_manager'),
-  assignVendors:   (u: User | null) => is(u, 'admin', 'property_manager'),
+  assignVendors:   (u: User | null) => is(u, 'admin', 'property_manager', 'landlord'),
   viewAnalytics:   (u: User | null) => is(u, 'admin', 'property_manager'),
   sendNotices:     (u: User | null) => is(u, 'admin', 'property_manager', 'landlord'),
   manageVendors:   (u: User | null) => is(u, 'admin', 'property_manager'),
   createContracts: (u: User | null) => is(u, 'admin', 'property_manager'),
   bookInspection:  (u: User | null) => is(u, 'tenant'),
   payRent:         (u: User | null) => is(u, 'tenant'),
-  submitMaintenance:(u: User | null) => is(u, 'tenant'),
+  submitMaintenance:(u: User | null) => is(u, 'admin', 'property_manager', 'landlord', 'tenant'),
+  manageMaintenance:(u: User | null) => is(u, 'admin', 'property_manager', 'landlord'),
   viewOwnJobs:     (u: User | null) => is(u, 'vendor'),
 };
 
@@ -148,7 +151,7 @@ export const routeRoles: Record<string, UserRole[]> = {
   '/search':              ['admin', 'property_manager', 'landlord', 'tenant', 'agent', 'vendor'],
   '/inspections':         ['admin', 'property_manager', 'tenant', 'agent'],
   '/payments':            ['admin', 'property_manager', 'landlord', 'tenant'],
-  '/maintenance':         ['admin', 'property_manager', 'tenant', 'vendor'],
+  '/maintenance':         ['admin', 'property_manager', 'landlord', 'tenant', 'vendor'],
   '/payouts':             ['admin', 'property_manager', 'landlord'],
   '/messages':            ['admin', 'property_manager', 'landlord', 'tenant', 'agent', 'vendor'],
   '/analytics':           ['admin', 'property_manager'],
