@@ -92,11 +92,23 @@ export const payoutsApi = {
 
 // ─── Users ───────────────────────────────────────────────────────────────────
 export const usersApi = {
-  list:    (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/users', { params }),
-  get:     (id: string) => api.get<ApiResponse<unknown>>(`/users/${id}`),
-  update:  (id: string, data: unknown) => api.put(`/users/${id}`, data),
-  suspend: (id: string) => api.patch(`/users/${id}/suspend`),
-  approve: (id: string) => api.patch(`/users/${id}/approve`),
+  list:              (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/users', { params }),
+  get:               (id: string) => api.get<ApiResponse<unknown>>(`/users/${id}`),
+  update:            (id: string, data: unknown) => api.put(`/users/${id}`, data),
+  suspend:           (id: string, reason?: string) => api.patch(`/users/${id}/suspend`, { reason }),
+  unsuspend:         (id: string) => api.patch(`/users/${id}/unsuspend`),
+  approve:           (id: string) => api.patch(`/users/${id}/approve`),
+  rejectApproval:    (id: string, reason: string) => api.patch(`/users/${id}/reject-approval`, { reason }),
+  pending:           () => api.get<ApiResponse<unknown[]>>('/users/pending'),
+  setPermissions:    (id: string, permissions: unknown) => api.patch(`/users/${id}/permissions`, { permissions }),
+  setDistricts:      (id: string, districts: string[]) => api.patch(`/users/${id}/districts`, { districts }),
+  changeRole:        (id: string, role: string) => api.patch(`/users/${id}/role`, { role }),
+};
+
+// ─── Auth (extended) ─────────────────────────────────────────────────────────
+export const authGoogleApi = {
+  loginOrRegister: (data: { googleId: string; email: string; firstName: string; lastName: string; avatar?: string; role?: string }) =>
+    api.post<ApiResponse<{ user: unknown; token: string; requiresApproval: boolean }>>('/auth/google', data),
 };
 
 // ─── Messages ────────────────────────────────────────────────────────────────

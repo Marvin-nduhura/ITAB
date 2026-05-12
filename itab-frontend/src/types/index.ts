@@ -1,6 +1,19 @@
 // ─── User & Auth ────────────────────────────────────────────────────────────
 export type UserRole = 'admin' | 'property_manager' | 'landlord' | 'tenant' | 'agent' | 'vendor' | 'guest';
 
+export interface UserPermissions {
+  canAddProperty?: boolean;
+  canEditProperty?: boolean;
+  canViewPayments?: boolean;
+  canManageUsers?: boolean;
+  canViewAnalytics?: boolean;
+  canSendNotices?: boolean;
+  canAssignVendors?: boolean;
+  canProcessPayouts?: boolean;
+  canViewAllMaintenance?: boolean;
+  canManageDisputes?: boolean;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -14,6 +27,12 @@ export interface User {
   suspendedReason?: string;
   suspendedAt?: string;
   kycStatus: 'pending' | 'submitted' | 'approved' | 'rejected';
+  permissions?: UserPermissions;
+  restrictedDistricts?: string[];   // empty = unrestricted
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  kycDocuments?: { type: string; url: string; uploadedAt: string }[];
+  googleId?: string;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
 }

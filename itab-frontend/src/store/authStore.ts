@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { User, UserRole } from '../types';
+import { api } from '../lib/api';
 
 interface AuthStore {
   user: User | null;
@@ -10,6 +11,7 @@ interface AuthStore {
   logout: () => void;
   updateUser: (updates: Partial<User>) => void;
   hasRole: (...roles: UserRole[]) => boolean;
+  syncWithBackend: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthStore>()(
@@ -39,6 +41,20 @@ export const useAuthStore = create<AuthStore>()(
         const user = get().user;
         if (!user) return false;
         return roles.includes(user.role);
+      },
+
+      syncWithBackend: async () => {
+        const { token, isAuthenticated } = get();
+        if (!isAuthenticated || !token) return;
+        try {
+          const res = await api.get('/auth/me');
+          const freshUser = res.data?.data as User;
+          if (freshUser) {
+            set({ user: freshUser });
+          }
+        } catch {
+          // Backend unavailable — keep local state, no action needed
+        }
       },
     }),
     {

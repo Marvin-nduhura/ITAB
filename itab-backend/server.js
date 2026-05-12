@@ -270,6 +270,50 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
   }
 });
 
+// ─── Google OAuth ─────────────────────────────────────────────────────────────
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { googleId, email, firstName, lastName, avatar, role } = req.body;
+    if (!email) return res.status(400).json({ message: 'Email is required' });
+
+    // Check if user already exists by email
+    const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (existing.rows.length > 0) {
+      const user = existing.rows[0];
+      // Update google_id if not set
+      if (!user.google_id && googleId) {
+        await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, user.id]);
+        user.google_id = googleId;
+      }
+      if (user.is_suspended) {
+        return res.status(403).json({ message: 'Account suspended', reason: user.suspended_reason, code: 'ACCOUNT_SUSPENDED' });
+      }
+      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+      return res.json({ data: { user: formatUser(user), token, requiresApproval: false } });
+    }
+
+    // New user
+    const selectedRole = role || 'tenant';
+    const requiresApproval = ['agent', 'property_manager'].includes(selectedRole);
+    const approvalStatus = requiresApproval ? 'pending' : 'approved';
+    const kycStatus = requiresApproval ? 'pending' : 'pending';
+    const isVerified = !requiresApproval;
+
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO users (id, first_name, last_name, email, role, avatar, google_id, kyc_status, is_verified, approval_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [id, firstName || email.split('@')[0], lastName || '', email, selectedRole, avatar || null, googleId || null, kycStatus, isVerified, approvalStatus]
+    );
+    const newUser = formatUser(result.rows[0]);
+    const token = jwt.sign({ id: newUser.id, role: newUser.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.status(201).json({ data: { user: newUser, token, requiresApproval } });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ─── Users (Admin) ────────────────────────────────────────────────────────────
 app.get('/api/users', auth, requireRole('admin'), async (req, res) => {
   try {
@@ -280,10 +324,74 @@ app.get('/api/users', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
+app.get('/api/users/pending', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM users WHERE approval_status='pending' ORDER BY created_at DESC");
+    res.json({ data: result.rows.map(formatUser) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/permissions', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { permissions } = req.body;
+    await pool.query('UPDATE users SET permissions=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(permissions || {}), req.params.id]);
+    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/districts', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { districts } = req.body;
+    await pool.query('UPDATE users SET restricted_districts=$1, updated_at=NOW() WHERE id=$2', [districts || [], req.params.id]);
+    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/role', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!role) return res.status(400).json({ message: 'Role is required' });
+    await pool.query('UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2', [role, req.params.id]);
+    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.patch('/api/users/:id/approve', auth, requireRole('admin'), async (req, res) => {
   try {
-    await pool.query('UPDATE users SET kyc_status=\'approved\', is_verified=true WHERE id=$1', [req.params.id]);
-    res.json({ data: { message: 'User approved' } });
+    await pool.query(
+      "UPDATE users SET kyc_status='approved', is_verified=true, approval_status='approved', updated_at=NOW() WHERE id=$1",
+      [req.params.id]
+    );
+    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { reason } = req.body;
+    await pool.query(
+      "UPDATE users SET approval_status='rejected', notes=$1, updated_at=NOW() WHERE id=$2",
+      [reason || null, req.params.id]
+    );
+    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+    res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -324,6 +432,12 @@ function formatUser(u) {
     isSuspended: u.is_suspended || false,
     suspendedReason: u.suspended_reason || undefined,
     kycStatus: u.kyc_status,
+    permissions: u.permissions || {},
+    restrictedDistricts: u.restricted_districts || [],
+    approvalStatus: u.approval_status || 'approved',
+    kycDocuments: u.kyc_documents || [],
+    googleId: u.google_id || undefined,
+    notes: u.notes || undefined,
     createdAt: u.created_at, updatedAt: u.updated_at,
   };
 }
@@ -351,6 +465,12 @@ async function initDB() {
         is_active BOOLEAN DEFAULT true, is_suspended BOOLEAN DEFAULT false,
         suspended_reason TEXT, suspended_at TIMESTAMPTZ,
         kyc_status VARCHAR(50) DEFAULT 'pending',
+        permissions JSONB DEFAULT '{}',
+        restricted_districts TEXT[] DEFAULT '{}',
+        approval_status VARCHAR(50) DEFAULT 'approved',
+        kyc_documents JSONB DEFAULT '[]',
+        google_id VARCHAR(255),
+        notes TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
       );
       CREATE TABLE IF NOT EXISTS properties (
@@ -392,6 +512,15 @@ async function initDB() {
         scheduled_date DATE, processed_at TIMESTAMPTZ, retry_count INT DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+    `);
+    // Add new columns to existing tables if they don't exist
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '{}';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS restricted_districts TEXT[] DEFAULT '{}';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50) DEFAULT 'approved';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_documents JSONB DEFAULT '[]';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS notes TEXT;
     `);
     console.log('✅ Database tables initialized');
   } catch (err) {

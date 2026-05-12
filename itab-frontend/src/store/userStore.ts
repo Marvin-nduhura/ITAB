@@ -1,8 +1,42 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User } from '../types';
+import type { User, UserRole, UserPermissions } from '../types';
 import { mockUsers } from '../lib/mockData';
 import { generateId } from '../lib/utils';
+
+// ─── Default permissions per role ────────────────────────────────────────────
+export const DEFAULT_ROLE_PERMISSIONS: Record<string, UserPermissions> = {
+  admin: {
+    canAddProperty: true, canEditProperty: true, canViewPayments: true,
+    canManageUsers: true, canViewAnalytics: true, canSendNotices: true,
+    canAssignVendors: true, canProcessPayouts: true, canViewAllMaintenance: true, canManageDisputes: true,
+  },
+  property_manager: {
+    canAddProperty: true, canEditProperty: true, canViewPayments: true,
+    canManageUsers: false, canViewAnalytics: true, canSendNotices: true,
+    canAssignVendors: true, canProcessPayouts: true, canViewAllMaintenance: true, canManageDisputes: false,
+  },
+  landlord: {
+    canAddProperty: true, canEditProperty: true, canViewPayments: true,
+    canManageUsers: false, canViewAnalytics: true, canSendNotices: false,
+    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
+  },
+  agent: {
+    canAddProperty: true, canEditProperty: false, canViewPayments: false,
+    canManageUsers: false, canViewAnalytics: false, canSendNotices: false,
+    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
+  },
+  tenant: {
+    canAddProperty: false, canEditProperty: false, canViewPayments: true,
+    canManageUsers: false, canViewAnalytics: false, canSendNotices: false,
+    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
+  },
+  vendor: {
+    canAddProperty: false, canEditProperty: false, canViewPayments: false,
+    canManageUsers: false, canViewAnalytics: false, canSendNotices: false,
+    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
+  },
+};
 
 export type AuditAction =
   | 'user_suspended' | 'user_banned' | 'user_unsuspended' | 'user_invited'
@@ -54,8 +88,17 @@ interface UserStore {
   approveKYC: (id: string, performedBy?: { id: string; name: string; role: string }) => void;
   rejectKYC: (id: string, performedBy?: { id: string; name: string; role: string }) => void;
   updateUser: (id: string, updates: Partial<User>) => void;
+  addUser: (user: User) => void;
   getUserById: (id: string) => User | undefined;
   isSuspended: (email: string) => { suspended: boolean; reason?: string };
+
+  // New permission/district/role management
+  updateUserPermissions: (id: string, permissions: UserPermissions) => void;
+  updateUserDistricts: (id: string, districts: string[]) => void;
+  changeUserRole: (id: string, role: UserRole) => void;
+  getPendingApprovals: () => User[];
+  approveUser: (id: string, performedBy?: { id: string; name: string; role: string }) => void;
+  rejectUserApproval: (id: string, reason: string, performedBy?: { id: string; name: string; role: string }) => void;
 
   // Audit logs
   addAuditLog: (log: Omit<AuditLog, 'id' | 'createdAt'>) => void;
@@ -217,12 +260,91 @@ export const useUserStore = create<UserStore>()(
         }));
       },
 
+      addUser: (user) => {
+        set(s => ({
+          users: [user, ...s.users.filter(u => u.id !== user.id && u.email !== user.email)],
+        }));
+      },
+
       getUserById: (id) => get().users.find(u => u.id === id),
 
       isSuspended: (email) => {
         const user = get().users.find(u => u.email === email);
         if (!user) return { suspended: false };
         return { suspended: !!user.isSuspended, reason: user.suspendedReason };
+      },
+
+      updateUserPermissions: (id, permissions) => {
+        set(s => ({
+          users: s.users.map(u =>
+            u.id === id ? { ...u, permissions, updatedAt: new Date().toISOString() } : u
+          ),
+        }));
+      },
+
+      updateUserDistricts: (id, districts) => {
+        set(s => ({
+          users: s.users.map(u =>
+            u.id === id ? { ...u, restrictedDistricts: districts, updatedAt: new Date().toISOString() } : u
+          ),
+        }));
+      },
+
+      changeUserRole: (id, role) => {
+        set(s => ({
+          users: s.users.map(u =>
+            u.id === id ? { ...u, role, updatedAt: new Date().toISOString() } : u
+          ),
+        }));
+      },
+
+      getPendingApprovals: () => {
+        return get().users.filter(u => u.approvalStatus === 'pending');
+      },
+
+      approveUser: (id, performedBy) => {
+        set(s => ({
+          users: s.users.map(u =>
+            u.id === id
+              ? { ...u, approvalStatus: 'approved', kycStatus: 'approved', isVerified: true, updatedAt: new Date().toISOString() }
+              : u
+          ),
+        }));
+        if (performedBy) {
+          const target = get().users.find(u => u.id === id);
+          get().addAuditLog({
+            action: 'agent_approved',
+            performedBy: performedBy.id,
+            performedByName: performedBy.name,
+            performedByRole: performedBy.role,
+            targetId: id,
+            targetName: target ? `${target.firstName} ${target.lastName}` : id,
+            description: `User approved`,
+          });
+        }
+      },
+
+      rejectUserApproval: (id, reason, performedBy) => {
+        set(s => ({
+          users: s.users.map(u =>
+            u.id === id
+              ? { ...u, approvalStatus: 'rejected', notes: reason, updatedAt: new Date().toISOString() }
+              : u
+          ),
+        }));
+        if (performedBy) {
+          const target = get().users.find(u => u.id === id);
+          get().addAuditLog({
+            action: 'agent_rejected',
+            performedBy: performedBy.id,
+            performedByName: performedBy.name,
+            performedByRole: performedBy.role,
+            targetId: id,
+            targetName: target ? `${target.firstName} ${target.lastName}` : id,
+            description: `User approval rejected. Reason: ${reason}`,
+            metadata: { reason },
+          });
+        }
       },
 
       addAuditLog: (log) => {

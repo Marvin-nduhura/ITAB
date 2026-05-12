@@ -89,6 +89,7 @@ function LandingOrDashboard() {
 export default function App() {
   const { theme } = useUIStore();
   const { setNotifications } = useNotificationStore();
+  const { isAuthenticated, syncWithBackend } = useAuthStore();
 
   useEffect(() => {
     // Apply theme on mount
@@ -107,6 +108,11 @@ export default function App() {
 
     // Load mock notifications
     setNotifications(mockNotifications);
+
+    // Sync user data from backend if authenticated
+    if (isAuthenticated) {
+      syncWithBackend();
+    }
 
     return () => mq.removeEventListener('change', handler);
   }, [theme]);

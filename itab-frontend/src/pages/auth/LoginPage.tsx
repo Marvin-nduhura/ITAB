@@ -11,6 +11,7 @@ import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { useAuthStore } from '../../store/authStore';
 import { useUserStore } from '../../store/userStore';
+import { authApi, authGoogleApi } from '../../lib/api';
 import { mockUsers } from '../../lib/mockData';
 
 const schema = z.object({
@@ -52,7 +53,35 @@ export function LoginPage() {
         });
         const googleUser = await res.json();
 
-        // Check if user exists in our system
+        // Try backend first
+        try {
+          const backendRes = await authGoogleApi.loginOrRegister({
+            googleId: googleUser.sub,
+            email: googleUser.email,
+            firstName: googleUser.given_name || '',
+            lastName: googleUser.family_name || '',
+            avatar: googleUser.picture,
+          });
+          const { user, token, requiresApproval } = backendRes.data.data;
+          if (requiresApproval) {
+            toast('Your account is pending approval. Please wait for admin review.', { icon: '⏳', duration: 6000 });
+            return;
+          }
+          const typedUser = user as Parameters<typeof setAuth>[0];
+          const suspensionCheck = isSuspended(typedUser.email);
+          if (suspensionCheck.suspended) {
+            toast.error(`Account suspended: ${suspensionCheck.reason || 'Contact support@itab.ug'}`, { duration: 8000, icon: '🚫' });
+            return;
+          }
+          setAuth(typedUser, token);
+          toast.success(`Welcome back, ${typedUser.firstName}! 👋`);
+          navigate('/dashboard');
+          return;
+        } catch {
+          // Backend unavailable — fall back to mock data
+        }
+
+        // Check if user exists in mock data
         const existingUser = mockUsers.find(u => u.email === googleUser.email);
         if (existingUser) {
           const suspensionCheck = isSuspended(existingUser.email);
@@ -83,11 +112,47 @@ export function LoginPage() {
   const onSubmit = async (data: FormData) => {
     setLoading(true);
     try {
+      // Try backend first
+      try {
+        const res = await authApi.login({ email: data.email, password: data.password });
+        const { user, token } = (res.data as { data: { user: Parameters<typeof setAuth>[0]; token: string } }).data;
+        const suspensionCheck = isSuspended(user.email);
+        if (suspensionCheck.suspended) {
+          toast.error(
+            `Your account has been suspended.\n${suspensionCheck.reason ? `Reason: ${suspensionCheck.reason}` : 'Please contact support at support@itab.ug'}`,
+            { duration: 8000, icon: '🚫' }
+          );
+          setLoading(false);
+          return;
+        }
+        setAuth(user, token);
+        toast.success(`Welcome back, ${user.firstName}!`);
+        navigate('/dashboard');
+        return;
+      } catch (backendErr: unknown) {
+        const err = backendErr as { response?: { status?: number; data?: { code?: string; reason?: string } } };
+        if (err.response?.status === 403 && err.response?.data?.code === 'ACCOUNT_SUSPENDED') {
+          toast.error(
+            `Your account has been suspended.\n${err.response.data.reason ? `Reason: ${err.response.data.reason}` : 'Please contact support at support@itab.ug'}`,
+            { duration: 8000, icon: '🚫' }
+          );
+          setLoading(false);
+          return;
+        }
+        if (err.response?.status === 401) {
+          // Backend says invalid credentials — don't fall back to mock
+          toast.error('Invalid email or password');
+          setLoading(false);
+          return;
+        }
+        // Backend unavailable — fall back to mock
+      }
+
+      // Mock fallback
       await new Promise(r => setTimeout(r, 800));
       const user = mockUsers.find(u => u.email === data.email);
       if (!user) throw new Error('Invalid credentials');
 
-      // Check suspension BEFORE allowing login
       const suspensionCheck = isSuspended(data.email);
       if (suspensionCheck.suspended) {
         toast.error(

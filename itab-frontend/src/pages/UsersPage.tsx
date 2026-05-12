@@ -1,20 +1,35 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Ban, CheckCircle2, Plus, UserX, UserCheck, AlertTriangle, X, Mail, Send, Copy, Link } from 'lucide-react';
+import { Search, Ban, CheckCircle2, Plus, UserX, UserCheck, AlertTriangle, X, Mail, Send, Copy, Link, Shield, MapPin, RotateCcw } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Avatar } from '../components/ui/Avatar';
 import { Modal } from '../components/ui/Modal';
 import { Input, Select, Textarea } from '../components/ui/Input';
-import { useUserStore } from '../store/userStore';
+import { useUserStore, DEFAULT_ROLE_PERMISSIONS } from '../store/userStore';
 import { useAuthStore } from '../store/authStore';
-import { roleLabels, formatDate, generateId } from '../lib/utils';
+import { roleLabels, formatDate, generateId, DISTRICTS } from '../lib/utils';
 import { isAdmin } from '../lib/rbac';
+import { usersApi } from '../lib/api';
 import toast from 'react-hot-toast';
-import type { User, UserRole } from '../types';
+import type { User, UserRole, UserPermissions } from '../types';
+
+// ─── Permission labels ────────────────────────────────────────────────────────
+const PERMISSION_LABELS: { key: keyof UserPermissions; label: string; desc: string }[] = [
+  { key: 'canAddProperty',       label: 'Add properties',        desc: 'Can list new properties' },
+  { key: 'canEditProperty',      label: 'Edit properties',       desc: 'Can modify property details' },
+  { key: 'canViewPayments',      label: 'View payments',         desc: 'Can see payment records' },
+  { key: 'canManageUsers',       label: 'Manage users',          desc: 'Can suspend/approve users' },
+  { key: 'canViewAnalytics',     label: 'View analytics',        desc: 'Can access analytics dashboard' },
+  { key: 'canSendNotices',       label: 'Send notices',          desc: 'Can send tenant notices' },
+  { key: 'canAssignVendors',     label: 'Assign vendors',        desc: 'Can assign vendors to jobs' },
+  { key: 'canProcessPayouts',    label: 'Process payouts',       desc: 'Can process landlord payouts' },
+  { key: 'canViewAllMaintenance','label': 'View all maintenance', desc: 'Can see all maintenance requests' },
+  { key: 'canManageDisputes',    label: 'Manage disputes',       desc: 'Can resolve disputes' },
+];
 
 export function UsersPage() {
-  const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC } = useUserStore();
+  const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC, updateUserPermissions, updateUserDistricts, changeUserRole, getPendingApprovals, approveUser, rejectUserApproval, updateUser } = useUserStore();
   const { user } = useAuthStore();
 
   // Hard guard — only admin can manage users
@@ -35,6 +50,18 @@ export function UsersPage() {
   const [suspendTarget, setSuspendTarget] = useState<User | null>(null);
   const [suspendReason, setSuspendReason] = useState('');
   const [suspendLoading, setSuspendLoading] = useState(false);
+
+  // User detail modal state
+  const [detailUser, setDetailUser] = useState<User | null>(null);
+  const [detailTab, setDetailTab] = useState<'profile' | 'permissions' | 'restrictions'>('profile');
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [editNotes, setEditNotes] = useState('');
+  const [editRole, setEditRole] = useState<UserRole>('tenant');
+  const [editPermissions, setEditPermissions] = useState<UserPermissions>({});
+  const [editDistricts, setEditDistricts] = useState<string[]>([]);
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<User | null>(null);
 
   // Invite modal state
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -57,12 +84,14 @@ export function UsersPage() {
     const matchStatus = !filterStatus
       || (filterStatus === 'suspended' && u.isSuspended)
       || (filterStatus === 'active' && !u.isSuspended)
-      || (filterStatus === 'pending_kyc' && u.kycStatus === 'submitted');
+      || (filterStatus === 'pending_kyc' && u.kycStatus === 'submitted')
+      || (filterStatus === 'pending_approval' && u.approvalStatus === 'pending');
     return matchQ && matchRole && matchStatus;
   });
 
   const suspendedCount = users.filter(u => u.isSuspended).length;
   const pendingKYCCount = users.filter(u => u.kycStatus === 'submitted').length;
+  const pendingApprovals = getPendingApprovals();
 
   const roleVariant = (role: string): 'red' | 'purple' | 'blue' | 'green' | 'yellow' | 'gray' => {
     const m: Record<string, 'red' | 'purple' | 'blue' | 'green' | 'yellow' | 'gray'> = {
@@ -97,6 +126,92 @@ export function UsersPage() {
   const handleRejectKYC = (u: User) => {
     rejectKYC(u.id);
     toast(`${u.firstName}'s KYC rejected.`, { icon: '❌' });
+  };
+
+  // ── User detail modal handlers ────────────────────────────────────────────
+  const openDetail = (u: User) => {
+    setDetailUser(u);
+    setDetailTab('profile');
+    setEditNotes(u.notes || '');
+    setEditRole(u.role);
+    setEditPermissions(u.permissions || DEFAULT_ROLE_PERMISSIONS[u.role] || {});
+    setEditDistricts(u.restrictedDistricts || []);
+  };
+
+  const handleSavePermissions = async () => {
+    if (!detailUser) return;
+    setDetailLoading(true);
+    try {
+      await usersApi.setPermissions(detailUser.id, editPermissions);
+    } catch { /* backend unavailable */ }
+    updateUserPermissions(detailUser.id, editPermissions);
+    setDetailUser(prev => prev ? { ...prev, permissions: editPermissions } : null);
+    toast.success('Permissions updated');
+    setDetailLoading(false);
+  };
+
+  const handleSaveDistricts = async () => {
+    if (!detailUser) return;
+    setDetailLoading(true);
+    try {
+      await usersApi.setDistricts(detailUser.id, editDistricts);
+    } catch { /* backend unavailable */ }
+    updateUserDistricts(detailUser.id, editDistricts);
+    setDetailUser(prev => prev ? { ...prev, restrictedDistricts: editDistricts } : null);
+    toast.success('District restrictions saved');
+    setDetailLoading(false);
+  };
+
+  const handleSaveRole = async () => {
+    if (!detailUser) return;
+    setDetailLoading(true);
+    try {
+      await usersApi.changeRole(detailUser.id, editRole);
+    } catch { /* backend unavailable */ }
+    changeUserRole(detailUser.id, editRole);
+    setDetailUser(prev => prev ? { ...prev, role: editRole } : null);
+    toast.success('Role updated');
+    setDetailLoading(false);
+  };
+
+  const handleSaveNotes = async () => {
+    if (!detailUser) return;
+    updateUser(detailUser.id, { notes: editNotes });
+    setDetailUser(prev => prev ? { ...prev, notes: editNotes } : null);
+    toast.success('Notes saved');
+  };
+
+  const handleApproveUser = async (u: User) => {
+    setDetailLoading(true);
+    try {
+      await usersApi.approve(u.id);
+    } catch { /* backend unavailable */ }
+    approveUser(u.id, user ? { id: user.id, name: `${user.firstName} ${user.lastName}`, role: user.role } : undefined);
+    setDetailUser(prev => prev ? { ...prev, approvalStatus: 'approved', kycStatus: 'approved', isVerified: true } : null);
+    toast.success(`${u.firstName} has been approved!`);
+    setDetailLoading(false);
+  };
+
+  const handleRejectApproval = async () => {
+    if (!rejectTarget || !rejectReason.trim()) { toast.error('Please provide a reason'); return; }
+    setDetailLoading(true);
+    try {
+      await usersApi.rejectApproval(rejectTarget.id, rejectReason);
+    } catch { /* backend unavailable */ }
+    rejectUserApproval(rejectTarget.id, rejectReason, user ? { id: user.id, name: `${user.firstName} ${user.lastName}`, role: user.role } : undefined);
+    setDetailUser(prev => prev ? { ...prev, approvalStatus: 'rejected' } : null);
+    toast(`${rejectTarget.firstName}'s application rejected.`, { icon: '❌' });
+    setShowRejectModal(false);
+    setRejectReason('');
+    setRejectTarget(null);
+    setDetailLoading(false);
+  };
+
+  const handleResetPermissions = () => {
+    if (!detailUser) return;
+    const defaults = DEFAULT_ROLE_PERMISSIONS[detailUser.role] || {};
+    setEditPermissions(defaults);
+    toast('Permissions reset to role defaults', { icon: '🔄' });
   };
 
   // ── Invite handlers ──────────────────────────────────────────────────────
@@ -177,10 +292,52 @@ export function UsersPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Users</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{users.length} total · {suspendedCount} suspended · {pendingKYCCount} pending KYC</p>
+          <p className="text-sm text-slate-500 mt-0.5">
+            {users.length} total · {suspendedCount} suspended · {pendingKYCCount} pending KYC
+            {pendingApprovals.length > 0 && ` · ${pendingApprovals.length} pending approval`}
+          </p>
         </div>
         <Button icon={<Plus size={16} />} onClick={() => setShowInviteModal(true)}>Invite User</Button>
       </div>
+
+      {/* Pending Approvals Card */}
+      <AnimatePresence>
+        {pendingApprovals.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-amber-200 dark:border-amber-800 overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800">
+              <AlertTriangle size={16} className="text-amber-600 flex-shrink-0" />
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                {pendingApprovals.length} Pending Approval{pendingApprovals.length > 1 ? 's' : ''}
+              </p>
+            </div>
+            <div className="divide-y divide-slate-100 dark:divide-slate-700">
+              {pendingApprovals.map(u => (
+                <div key={u.id} className="flex items-center gap-4 px-4 py-3">
+                  <Avatar name={`${u.firstName} ${u.lastName}`} src={u.avatar} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm text-slate-900 dark:text-slate-100">{u.firstName} {u.lastName}</p>
+                    <p className="text-xs text-slate-400">{u.email} · Applied as {roleLabels[u.role]}</p>
+                  </div>
+                  <Badge variant="yellow">Pending</Badge>
+                  <div className="flex gap-2">
+                    <Button size="sm" icon={<CheckCircle2 size={12} />} onClick={() => handleApproveUser(u)}>
+                      Approve
+                    </Button>
+                    <Button size="sm" variant="danger" icon={<X size={12} />}
+                      onClick={() => { setRejectTarget(u); setShowRejectModal(true); }}>
+                      Reject
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => openDetail(u)}>
+                      View
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Alert for pending KYC */}
       <AnimatePresence>
@@ -207,7 +364,7 @@ export function UsersPage() {
           <Select value={filterRole} onChange={e => setFilterRole(e.target.value)}
             options={[{ value: '', label: 'All Roles' }, { value: 'admin', label: 'Admin' }, { value: 'property_manager', label: 'Property Manager' }, { value: 'landlord', label: 'Landlord' }, { value: 'tenant', label: 'Tenant' }, { value: 'agent', label: 'Agent' }, { value: 'vendor', label: 'Vendor' }]} />
           <Select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-            options={[{ value: '', label: 'All Status' }, { value: 'active', label: 'Active' }, { value: 'suspended', label: 'Suspended' }, { value: 'pending_kyc', label: 'Pending KYC' }]} />
+            options={[{ value: '', label: 'All Status' }, { value: 'active', label: 'Active' }, { value: 'suspended', label: 'Suspended' }, { value: 'pending_kyc', label: 'Pending KYC' }, { value: 'pending_approval', label: 'Pending Approval' }]} />
           {(search || filterRole || filterStatus) && (
             <Button variant="ghost" size="sm" icon={<X size={14} />} onClick={() => { setSearch(''); setFilterRole(''); setFilterStatus(''); }}>
               Clear
@@ -231,7 +388,8 @@ export function UsersPage() {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
               {filtered.map((u, i) => (
                 <motion.tr key={u.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }}
-                  className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors ${u.isSuspended ? 'opacity-60' : ''}`}>
+                  className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors cursor-pointer ${u.isSuspended ? 'opacity-60' : ''}`}
+                  onClick={() => openDetail(u)}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       <div className="relative">
@@ -248,6 +406,9 @@ export function UsersPage() {
                         {u.isSuspended && u.suspendedReason && (
                           <p className="text-xs text-red-500 mt-0.5 max-w-[180px] truncate">🚫 {u.suspendedReason}</p>
                         )}
+                        {u.approvalStatus === 'pending' && (
+                          <p className="text-xs text-amber-500 mt-0.5">⏳ Pending approval</p>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -261,12 +422,14 @@ export function UsersPage() {
                   <td className="px-4 py-3">
                     {u.isSuspended
                       ? <Badge variant="red" dot>Suspended</Badge>
-                      : u.isVerified
-                        ? <Badge variant="green" dot>Active</Badge>
-                        : <Badge variant="gray" dot>Unverified</Badge>}
+                      : u.approvalStatus === 'pending'
+                        ? <Badge variant="yellow" dot>Pending</Badge>
+                        : u.isVerified
+                          ? <Badge variant="green" dot>Active</Badge>
+                          : <Badge variant="gray" dot>Unverified</Badge>}
                   </td>
                   <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">{formatDate(u.createdAt)}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="flex gap-1.5 flex-wrap">
                       {/* KYC actions */}
                       {u.kycStatus === 'submitted' && (
@@ -316,7 +479,6 @@ export function UsersPage() {
       >
         {suspendTarget && (
           <div className="space-y-4">
-            {/* User info */}
             <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
               <Avatar name={`${suspendTarget.firstName} ${suspendTarget.lastName}`} size="md" />
               <div>
@@ -324,8 +486,6 @@ export function UsersPage() {
                 <p className="text-xs text-slate-400">{suspendTarget.email} · {roleLabels[suspendTarget.role]}</p>
               </div>
             </div>
-
-            {/* Warning */}
             <div className="flex items-start gap-2.5 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
               <AlertTriangle size={15} className="text-red-600 mt-0.5 flex-shrink-0" />
               <div className="text-xs text-red-700 dark:text-red-400 space-y-1">
@@ -338,12 +498,8 @@ export function UsersPage() {
                 <p className="mt-1">You can unsuspend them at any time.</p>
               </div>
             </div>
-
-            {/* Reason selector */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                Reason for suspension *
-              </label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Reason for suspension *</label>
               <div className="space-y-1.5">
                 {SUSPEND_REASONS.map(r => (
                   <button key={r} onClick={() => setSuspendReason(r)}
@@ -353,20 +509,180 @@ export function UsersPage() {
                 ))}
               </div>
               {suspendReason === 'Other (specify below)' && (
-                <Textarea
-                  className="mt-2"
-                  placeholder="Describe the reason for suspension..."
+                <Textarea className="mt-2" placeholder="Describe the reason for suspension..."
                   value={suspendReason === 'Other (specify below)' ? '' : suspendReason}
-                  onChange={e => setSuspendReason(e.target.value || 'Other (specify below)')}
-                  rows={3}
-                />
+                  onChange={e => setSuspendReason(e.target.value || 'Other (specify below)')} rows={3} />
               )}
             </div>
           </div>
         )}
       </Modal>
 
-      {/* ── Invite User Modal ─────────────────────────────────────────── */}
+      {/* User Detail Modal */}
+      <Modal
+        open={!!detailUser}
+        onClose={() => setDetailUser(null)}
+        title={detailUser ? `${detailUser.firstName} ${detailUser.lastName}` : ''}
+        size="lg"
+        footer={<Button variant="secondary" onClick={() => setDetailUser(null)}>Close</Button>}
+      >
+        {detailUser && (
+          <div className="space-y-4">
+            <div className="flex gap-1 p-1 bg-slate-100 dark:bg-slate-700 rounded-xl">
+              {(['profile', 'permissions', 'restrictions'] as const).map(tab => (
+                <button key={tab} onClick={() => setDetailTab(tab)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all capitalize ${
+                    detailTab === tab ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}>
+                  {tab === 'profile' && <UserCheck size={14} />}
+                  {tab === 'permissions' && <Shield size={14} />}
+                  {tab === 'restrictions' && <MapPin size={14} />}
+                  {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {detailTab === 'profile' && (
+              <div className="space-y-4">
+                <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                  <Avatar name={`${detailUser.firstName} ${detailUser.lastName}`} src={detailUser.avatar} size="lg" />
+                  <div className="flex-1">
+                    <p className="font-bold text-slate-900 dark:text-slate-100">{detailUser.firstName} {detailUser.lastName}</p>
+                    <p className="text-sm text-slate-500">{detailUser.email}</p>
+                    {detailUser.phone && <p className="text-sm text-slate-500">{detailUser.phone}</p>}
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      <Badge variant={roleVariant(detailUser.role)}>{roleLabels[detailUser.role]}</Badge>
+                      {detailUser.approvalStatus === 'pending' && <Badge variant="yellow">Pending Approval</Badge>}
+                      {detailUser.approvalStatus === 'rejected' && <Badge variant="red">Rejected</Badge>}
+                      {detailUser.isSuspended && <Badge variant="red">Suspended</Badge>}
+                      {detailUser.isVerified && !detailUser.isSuspended && <Badge variant="green">Verified</Badge>}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-3 items-end">
+                  <div className="flex-1">
+                    <Select label="Change Role" value={editRole} onChange={e => setEditRole(e.target.value as UserRole)}
+                      options={[
+                        { value: 'admin', label: 'Admin' }, { value: 'property_manager', label: 'Property Manager' },
+                        { value: 'landlord', label: 'Landlord' }, { value: 'tenant', label: 'Tenant' },
+                        { value: 'agent', label: 'Agent' }, { value: 'vendor', label: 'Vendor' },
+                      ]} />
+                  </div>
+                  <Button size="sm" loading={detailLoading} onClick={handleSaveRole} disabled={editRole === detailUser.role}>Save Role</Button>
+                </div>
+                {detailUser.approvalStatus === 'pending' && (
+                  <div className="flex gap-2">
+                    <Button icon={<CheckCircle2 size={14} />} loading={detailLoading} onClick={() => handleApproveUser(detailUser)}>Approve Application</Button>
+                    <Button variant="danger" icon={<X size={14} />} onClick={() => { setRejectTarget(detailUser); setShowRejectModal(true); }}>Reject Application</Button>
+                  </div>
+                )}
+                {detailUser.kycStatus === 'submitted' && detailUser.approvalStatus !== 'pending' && (
+                  <div className="flex gap-2">
+                    <Button size="sm" icon={<CheckCircle2 size={12} />} onClick={() => { handleApproveKYC(detailUser); setDetailUser(prev => prev ? { ...prev, kycStatus: 'approved', isVerified: true } : null); }}>Approve KYC</Button>
+                    <Button size="sm" variant="secondary" icon={<X size={12} />} onClick={() => { handleRejectKYC(detailUser); setDetailUser(prev => prev ? { ...prev, kycStatus: 'rejected' } : null); }}>Reject KYC</Button>
+                  </div>
+                )}
+                {detailUser.role !== 'admin' && (
+                  detailUser.isSuspended ? (
+                    <Button variant="secondary" icon={<UserCheck size={14} />} className="text-green-600 border-green-300"
+                      onClick={() => { handleUnsuspend(detailUser); setDetailUser(prev => prev ? { ...prev, isSuspended: false, suspendedReason: undefined } : null); }}>
+                      Unsuspend Account
+                    </Button>
+                  ) : (
+                    <Button variant="danger" icon={<UserX size={14} />} onClick={() => { setSuspendTarget(detailUser); setSuspendReason(''); }}>
+                      Suspend Account
+                    </Button>
+                  )
+                )}
+                <div>
+                  <Textarea label="Admin Notes" placeholder="Add private notes about this user..."
+                    value={editNotes} onChange={e => setEditNotes(e.target.value)} rows={3} />
+                  <Button size="sm" variant="secondary" className="mt-2" onClick={handleSaveNotes}>Save Notes</Button>
+                </div>
+              </div>
+            )}
+
+            {detailTab === 'permissions' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-slate-500">Toggle individual permissions. Overrides role defaults.</p>
+                  <Button size="sm" variant="secondary" icon={<RotateCcw size={12} />} onClick={handleResetPermissions}>Reset to defaults</Button>
+                </div>
+                <div className="space-y-2">
+                  {PERMISSION_LABELS.map(({ key, label, desc }) => (
+                    <div key={key} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                      <div>
+                        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{label}</p>
+                        <p className="text-xs text-slate-400">{desc}</p>
+                      </div>
+                      <button type="button" onClick={() => setEditPermissions(prev => ({ ...prev, [key]: !prev[key] }))}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${editPermissions[key] ? 'bg-primary-600' : 'bg-slate-300 dark:bg-slate-600'}`}
+                        role="switch" aria-checked={!!editPermissions[key]}>
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${editPermissions[key] ? 'translate-x-6' : 'translate-x-1'}`} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <Button loading={detailLoading} onClick={handleSavePermissions} className="w-full">Save Permissions</Button>
+              </div>
+            )}
+
+            {detailTab === 'restrictions' && (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">District Restrictions</p>
+                  <p className="text-xs text-slate-400 mb-3">
+                    {editDistricts.length === 0 ? 'No restrictions — this user can work in all districts.' : `Restricted to: ${editDistricts.join(', ')}`}
+                  </p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {DISTRICTS.map(d => (
+                      <button key={d} type="button"
+                        onClick={() => setEditDistricts(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                          editDistricts.includes(d)
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                            : 'border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+                        }`}>
+                        <MapPin size={10} />{d}
+                      </button>
+                    ))}
+                  </div>
+                  {editDistricts.length > 0 && (
+                    <button type="button" onClick={() => setEditDistricts([])} className="mt-2 text-xs text-red-500 hover:text-red-600">
+                      Clear all restrictions
+                    </button>
+                  )}
+                </div>
+                <Button loading={detailLoading} onClick={handleSaveDistricts} className="w-full">Save District Restrictions</Button>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* Reject Approval Modal */}
+      <Modal
+        open={showRejectModal}
+        onClose={() => { setShowRejectModal(false); setRejectReason(''); setRejectTarget(null); }}
+        title="Reject Application"
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => { setShowRejectModal(false); setRejectReason(''); setRejectTarget(null); }}>Cancel</Button>
+            <Button variant="danger" loading={detailLoading} onClick={handleRejectApproval}>Reject</Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Provide a reason for rejecting {rejectTarget?.firstName}'s application.
+          </p>
+          <Textarea label="Reason *" placeholder="e.g. Incomplete documents, invalid National ID..."
+            value={rejectReason} onChange={e => setRejectReason(e.target.value)} rows={3} />
+        </div>
+      </Modal>
+
+      {/* Invite User Modal */}
       <Modal
         open={showInviteModal}
         onClose={resetInviteModal}

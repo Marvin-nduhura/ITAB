@@ -4,13 +4,18 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Eye, EyeOff, CheckCircle2, ChevronRight } from 'lucide-react';
+import { Eye, EyeOff, CheckCircle2, ChevronRight, Clock, FileText, MapPin } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useGoogleLogin } from '@react-oauth/google';
 import { Button } from '../../components/ui/Button';
-import { Input, Select } from '../../components/ui/Input';
+import { Input, Select, Textarea } from '../../components/ui/Input';
 import { Modal } from '../../components/ui/Modal';
+import { FileUpload } from '../../components/ui/FileUpload';
+import type { UploadedFile } from '../../components/ui/FileUpload';
 import { useAuthStore } from '../../store/authStore';
+import { useUserStore } from '../../store/userStore';
+import { authApi, authGoogleApi } from '../../lib/api';
+import { DISTRICTS } from '../../lib/utils';
 import type { UserRole } from '../../types';
 
 // ─── Role options (shared between form and Google modal) ─────────────────────
@@ -39,11 +44,22 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+// ─── Application schema (for agent/property_manager) ─────────────────────────
+const applicationSchema = z.object({
+  nationalId: z.string().min(10, 'National ID required'),
+  experience: z.string().min(20, 'Please describe your experience (min 20 characters)'),
+  districts: z.array(z.string()).min(1, 'Select at least one district'),
+  motivation: z.string().min(30, 'Please explain your motivation (min 30 characters)'),
+});
+
+type ApplicationData = z.infer<typeof applicationSchema>;
+
 // ─── Component ────────────────────────────────────────────────────────────────
 export function RegisterPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { setAuth } = useAuthStore();
+  const { addUser, submitAgentApplication } = useUserStore();
 
   const [showPassword, setShowPassword]     = useState(false);
   const [showConfirm, setShowConfirm]       = useState(false);
@@ -51,6 +67,23 @@ export function RegisterPage() {
   const [googleLoading, setGoogleLoading]   = useState(false);
   const [isInvited, setIsInvited]           = useState(false);
   const [invitedRole, setInvitedRole]       = useState<string>('tenant');
+
+  // Application flow state (for agent/property_manager)
+  const [showApplicationFlow, setShowApplicationFlow] = useState(false);
+  const [applicationSubmitted, setApplicationSubmitted] = useState(false);
+  const [pendingFormData, setPendingFormData] = useState<FormData | null>(null);
+  const [pendingGoogleUser, setPendingGoogleUser] = useState<{
+    googleId: string; email: string; firstName: string; lastName: string; avatar?: string; role: string;
+  } | null>(null);
+  const [nationalIdFiles, setNationalIdFiles] = useState<UploadedFile[]>([]);
+  const [appDistricts, setAppDistricts] = useState<string[]>([]);
+  const [appLoading, setAppLoading] = useState(false);
+
+  const {
+    register: registerApp,
+    handleSubmit: handleAppSubmit,
+    formState: { errors: appErrors },
+  } = useForm<ApplicationData>({ resolver: zodResolver(applicationSchema) });
 
   // Google role-selection modal state
   const [showRoleModal, setShowRoleModal]   = useState(false);
@@ -60,11 +93,14 @@ export function RegisterPage() {
     register,
     handleSubmit,
     setValue,
+    watch,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: { role: 'tenant' },
   });
+
+  const watchedRole = watch('role');
 
   // ── Read invite URL params on mount ────────────────────────────────────────
   useEffect(() => {
@@ -77,7 +113,7 @@ export function RegisterPage() {
 
     if (inviteToken) {
       setIsInvited(true);
-      if (inviteRole)      setValue('role', inviteRole as any);
+      if (inviteRole)      setValue('role', inviteRole as 'tenant' | 'landlord' | 'property_manager' | 'agent' | 'vendor');
       if (inviteEmail)     setValue('email', inviteEmail);
       if (inviteFirstName) setValue('firstName', inviteFirstName);
       if (inviteLastName)  setValue('lastName', inviteLastName);
@@ -93,6 +129,8 @@ export function RegisterPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const requiresApplication = (role: string) => ['agent', 'property_manager'].includes(role);
+
   // ── Google OAuth (called AFTER role is selected in modal) ──────────────────
   const googleLogin = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
@@ -104,24 +142,52 @@ export function RegisterPage() {
         const googleUser = await res.json();
 
         const selectedRole = googleRole || 'tenant';
-        const roleLabel = ROLE_OPTIONS.find(r => r.value === selectedRole)?.label ?? selectedRole;
-
-        const newUser = {
-          id:         `u_${Date.now()}`,
-          email:      googleUser.email,
-          firstName:  googleUser.given_name  || googleUser.name?.split(' ')[0] || 'User',
-          lastName:   googleUser.family_name || googleUser.name?.split(' ').slice(1).join(' ') || '',
-          avatar:     googleUser.picture,
-          role:       selectedRole as UserRole,
-          isVerified: true,
-          isSuspended: false,
-          kycStatus:  'pending' as const,
-          createdAt:  new Date().toISOString(),
-          updatedAt:  new Date().toISOString(),
+        const googleData = {
+          googleId: googleUser.sub,
+          email: googleUser.email,
+          firstName: googleUser.given_name || googleUser.name?.split(' ')[0] || 'User',
+          lastName: googleUser.family_name || googleUser.name?.split(' ').slice(1).join(' ') || '',
+          avatar: googleUser.picture,
+          role: selectedRole,
         };
 
-        setAuth(newUser, `google_token_${newUser.id}`);
-        toast.success(`Welcome to ITAB, ${newUser.firstName}! Signed up as ${roleLabel} 🎉`);
+        if (requiresApplication(selectedRole)) {
+          // Show application flow
+          setPendingGoogleUser(googleData);
+          setShowRoleModal(false);
+          setShowApplicationFlow(true);
+          setGoogleLoading(false);
+          return;
+        }
+
+        // Try backend first, fall back to local
+        try {
+          const backendRes = await authGoogleApi.loginOrRegister(googleData);
+          const { user, token } = backendRes.data.data;
+          setAuth(user as Parameters<typeof setAuth>[0], token);
+          addUser(user as Parameters<typeof setAuth>[0]);
+        } catch {
+          // Backend unavailable — create locally
+          const newUser = {
+            id: `u_${Date.now()}`,
+            email: googleData.email,
+            firstName: googleData.firstName,
+            lastName: googleData.lastName,
+            avatar: googleData.avatar,
+            role: selectedRole as UserRole,
+            isVerified: true,
+            isSuspended: false,
+            kycStatus: 'pending' as const,
+            approvalStatus: 'approved' as const,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          setAuth(newUser, `google_token_${newUser.id}`);
+          addUser(newUser);
+        }
+
+        const roleLabel = ROLE_OPTIONS.find(r => r.value === selectedRole)?.label ?? selectedRole;
+        toast.success(`Welcome to ITAB, ${googleData.firstName}! Signed up as ${roleLabel} 🎉`);
         navigate('/dashboard');
       } catch {
         toast.error('Google sign-up failed. Please try again.');
@@ -138,10 +204,15 @@ export function RegisterPage() {
 
   // ── Regular form submit ────────────────────────────────────────────────────
   const onSubmit = async (data: FormData) => {
+    if (requiresApplication(data.role)) {
+      // Show application flow instead of registering immediately
+      setPendingFormData(data);
+      setShowApplicationFlow(true);
+      return;
+    }
+
     setLoading(true);
     try {
-      await new Promise(r => setTimeout(r, 800));
-
       const newUser = {
         id:          `u_${Date.now()}`,
         email:       data.email,
@@ -152,11 +223,27 @@ export function RegisterPage() {
         isVerified:  false,
         isSuspended: false,
         kycStatus:   'pending' as const,
+        approvalStatus: 'approved' as const,
         createdAt:   new Date().toISOString(),
         updatedAt:   new Date().toISOString(),
       };
 
-      setAuth(newUser, `mock_token_${newUser.id}`);
+      // Try backend first
+      try {
+        const res = await authApi.register({
+          firstName: data.firstName, lastName: data.lastName,
+          email: data.email, phone: data.phone,
+          password: data.password, role: data.role,
+        });
+        const { user: backendUser, token } = (res.data as { data: { user: typeof newUser; token: string } }).data;
+        setAuth(backendUser, token);
+        addUser(backendUser);
+      } catch {
+        // Backend unavailable — use local
+        setAuth(newUser, `mock_token_${newUser.id}`);
+        addUser(newUser);
+      }
+
       const roleLabel = ROLE_OPTIONS.find(r => r.value === data.role)?.label ?? data.role;
       toast.success(`Welcome to ITAB, ${newUser.firstName}! Registered as ${roleLabel} 🎉`);
       navigate('/dashboard');
@@ -164,6 +251,81 @@ export function RegisterPage() {
       toast.error('Registration failed. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Application submit (for agent/property_manager) ────────────────────────
+  const onApplicationSubmit = async (appData: ApplicationData) => {
+    if (nationalIdFiles.length === 0) {
+      toast.error('Please upload your National ID photo');
+      return;
+    }
+    setAppLoading(true);
+    try {
+      await new Promise(r => setTimeout(r, 800));
+
+      if (pendingFormData) {
+        // Email registration with application
+        const newUser = {
+          id:          `u_${Date.now()}`,
+          email:       pendingFormData.email,
+          phone:       pendingFormData.phone,
+          firstName:   pendingFormData.firstName,
+          lastName:    pendingFormData.lastName,
+          role:        pendingFormData.role as UserRole,
+          isVerified:  false,
+          isSuspended: false,
+          kycStatus:   'submitted' as const,
+          approvalStatus: 'pending' as const,
+          createdAt:   new Date().toISOString(),
+          updatedAt:   new Date().toISOString(),
+        };
+        addUser(newUser);
+        submitAgentApplication({
+          userId: newUser.id,
+          firstName: pendingFormData.firstName,
+          lastName: pendingFormData.lastName,
+          email: pendingFormData.email,
+          phone: pendingFormData.phone,
+          experience: appData.experience,
+          districts: appData.districts,
+          motivation: appData.motivation,
+        });
+      } else if (pendingGoogleUser) {
+        // Google registration with application
+        const newUser = {
+          id:          `u_${Date.now()}`,
+          email:       pendingGoogleUser.email,
+          firstName:   pendingGoogleUser.firstName,
+          lastName:    pendingGoogleUser.lastName,
+          avatar:      pendingGoogleUser.avatar,
+          role:        pendingGoogleUser.role as UserRole,
+          isVerified:  false,
+          isSuspended: false,
+          kycStatus:   'submitted' as const,
+          approvalStatus: 'pending' as const,
+          googleId:    pendingGoogleUser.googleId,
+          createdAt:   new Date().toISOString(),
+          updatedAt:   new Date().toISOString(),
+        };
+        addUser(newUser);
+        submitAgentApplication({
+          userId: newUser.id,
+          firstName: pendingGoogleUser.firstName,
+          lastName: pendingGoogleUser.lastName,
+          email: pendingGoogleUser.email,
+          phone: '',
+          experience: appData.experience,
+          districts: appData.districts,
+          motivation: appData.motivation,
+        });
+      }
+
+      setApplicationSubmitted(true);
+    } catch {
+      toast.error('Application submission failed. Please try again.');
+    } finally {
+      setAppLoading(false);
     }
   };
 
@@ -184,6 +346,121 @@ export function RegisterPage() {
             <p className="text-slate-500 dark:text-slate-400 mt-1 text-sm">Uganda's premier property platform</p>
           </div>
 
+          {/* Application Submitted Screen */}
+          {applicationSubmitted ? (
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card-lg border border-slate-100 dark:border-slate-700 p-8 text-center">
+              <div className="w-20 h-20 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Clock size={36} className="text-amber-600" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-2">Application Under Review</h2>
+              <p className="text-slate-500 dark:text-slate-400 mb-6">
+                Your application has been submitted. Our team will review your documents and get back to you within 2-3 business days.
+              </p>
+              <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl mb-6 text-left">
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">What happens next?</p>
+                <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
+                  <li>Admin reviews your National ID and application</li>
+                  <li>You will receive an email notification once approved</li>
+                  <li>After approval, you can log in and access your dashboard</li>
+                </ul>
+              </div>
+              <Button className="w-full" onClick={() => navigate('/login')}>Back to Login</Button>
+            </div>
+          ) : showApplicationFlow ? (
+            /* Application Flow */
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card-lg border border-slate-100 dark:border-slate-700 p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-900/30 rounded-xl flex items-center justify-center">
+                  <FileText size={20} className="text-amber-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Application Required</h2>
+                  <p className="text-xs text-slate-500">
+                    {(pendingFormData?.role === 'agent' || pendingGoogleUser?.role === 'agent') ? 'Agent' : 'Property Manager'} accounts require verification
+                  </p>
+                </div>
+              </div>
+              <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl mb-6">
+                <p className="text-xs text-blue-700 dark:text-blue-300">
+                  To protect our platform, agents and property managers must submit an application with identity verification. You will not be able to access the dashboard until approved.
+                </p>
+              </div>
+              <form onSubmit={handleAppSubmit(onApplicationSubmit)} className="space-y-5">
+                <Input
+                  label="National ID Number *"
+                  placeholder="e.g. CM90100012345ABCD"
+                  error={appErrors.nationalId?.message}
+                  {...registerApp('nationalId')}
+                />
+                <FileUpload
+                  label="National ID Photo *"
+                  accept="image/*"
+                  multiple={false}
+                  maxFiles={1}
+                  value={nationalIdFiles}
+                  onChange={setNationalIdFiles}
+                  hint="Upload a clear photo of your National ID (front side)"
+                  showCamera
+                />
+                <Textarea
+                  label="Experience *"
+                  placeholder="Describe your experience in real estate, property management, or related fields..."
+                  rows={3}
+                  error={appErrors.experience?.message}
+                  {...registerApp('experience')}
+                />
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Districts you operate in *
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {DISTRICTS.map(d => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setAppDistricts(prev =>
+                          prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]
+                        )}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                          appDistricts.includes(d)
+                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
+                            : 'border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-400 hover:border-slate-300'
+                        }`}
+                      >
+                        <MapPin size={10} />
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                  {appErrors.districts && (
+                    <p className="mt-1 text-xs text-red-500">{appErrors.districts.message}</p>
+                  )}
+                  <input type="hidden" {...registerApp('districts')} value={appDistricts} />
+                </div>
+                <Textarea
+                  label="Why do you want to join ITAB? *"
+                  placeholder="Tell us your motivation and what you hope to achieve on the platform..."
+                  rows={3}
+                  error={appErrors.motivation?.message}
+                  {...registerApp('motivation')}
+                />
+                <div className="flex gap-3 pt-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="flex-1"
+                    onClick={() => { setShowApplicationFlow(false); setPendingFormData(null); setPendingGoogleUser(null); }}
+                  >
+                    Back
+                  </Button>
+                  <Button type="submit" loading={appLoading} className="flex-1">
+                    Submit Application
+                  </Button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <>
           {/* Invite banner */}
           <AnimatePresence>
             {isInvited && (
@@ -277,6 +554,15 @@ export function RegisterPage() {
                 {...register('role')}
               />
 
+              {/* Application required notice */}
+              {requiresApplication(watchedRole) && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Application required: {watchedRole === 'agent' ? 'Agent' : 'Property Manager'} accounts require identity verification and admin approval before you can access the platform.
+                  </p>
+                </div>
+              )}
+
               <Input
                 label="Password"
                 type={showPassword ? 'text' : 'password'}
@@ -330,7 +616,7 @@ export function RegisterPage() {
                 size="lg"
                 iconRight={!loading ? <ChevronRight size={16} /> : undefined}
               >
-                Create account
+                {requiresApplication(watchedRole) ? 'Continue to Application' : 'Create account'}
               </Button>
             </form>
 
@@ -341,10 +627,12 @@ export function RegisterPage() {
               </p>
             </div>
           </div>
+            </>
+          )}
         </motion.div>
       </div>
 
-      {/* ── Google Role Selection Modal ─────────────────────────────────────── */}
+      {/* Google Role Selection Modal */}
       <Modal
         open={showRoleModal}
         onClose={() => { setShowRoleModal(false); setGoogleRole(''); }}
@@ -352,10 +640,7 @@ export function RegisterPage() {
         size="md"
         footer={
           <>
-            <Button
-              variant="secondary"
-              onClick={() => { setShowRoleModal(false); setGoogleRole(''); }}
-            >
+            <Button variant="secondary" onClick={() => { setShowRoleModal(false); setGoogleRole(''); }}>
               Cancel
             </Button>
             <Button
@@ -393,6 +678,9 @@ export function RegisterPage() {
                     {role.label}
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{role.desc}</p>
+                  {requiresApplication(role.value) && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">Requires application and approval</p>
+                  )}
                 </div>
                 {isSelected && (
                   <CheckCircle2 className="w-5 h-5 text-primary-600 dark:text-primary-400 flex-shrink-0" />
