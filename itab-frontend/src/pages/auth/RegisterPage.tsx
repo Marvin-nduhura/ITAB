@@ -76,6 +76,7 @@ export function RegisterPage() {
     googleId: string; email: string; firstName: string; lastName: string; avatar?: string; role: string;
   } | null>(null);
   const [nationalIdFiles, setNationalIdFiles] = useState<UploadedFile[]>([]);
+  const [additionalDocs, setAdditionalDocs] = useState<UploadedFile[]>([]);
   const [appDistricts, setAppDistricts] = useState<string[]>([]);
   const [appLoading, setAppLoading] = useState(false);
 
@@ -129,7 +130,7 @@ export function RegisterPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const requiresApplication = (role: string) => ['agent', 'property_manager'].includes(role);
+  const requiresApplication = (role: string) => ['agent', 'property_manager', 'landlord'].includes(role);
 
   // ── Google OAuth (called AFTER role is selected in modal) ──────────────────
   const googleLogin = useGoogleLogin({
@@ -287,6 +288,10 @@ export function RegisterPage() {
           lastName: pendingFormData.lastName,
           email: pendingFormData.email,
           phone: pendingFormData.phone,
+          role: pendingFormData.role,
+          nationalIdNumber: appData.nationalId,
+          nationalIdDoc: nationalIdFiles[0]?.dataUrl,
+          additionalDocs: additionalDocs.map(f => ({ name: f.file?.name || 'document', dataUrl: f.dataUrl, type: f.file?.type || 'image' })),
           experience: appData.experience,
           districts: appData.districts,
           motivation: appData.motivation,
@@ -315,6 +320,10 @@ export function RegisterPage() {
           lastName: pendingGoogleUser.lastName,
           email: pendingGoogleUser.email,
           phone: '',
+          role: pendingGoogleUser.role,
+          nationalIdNumber: appData.nationalId,
+          nationalIdDoc: nationalIdFiles[0]?.dataUrl,
+          additionalDocs: additionalDocs.map(f => ({ name: f.file?.name || 'document', dataUrl: f.dataUrl, type: f.file?.type || 'image' })),
           experience: appData.experience,
           districts: appData.districts,
           motivation: appData.motivation,
@@ -354,14 +363,19 @@ export function RegisterPage() {
               </div>
               <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-2">Application Under Review</h2>
               <p className="text-slate-500 dark:text-slate-400 mb-6">
-                Your application has been submitted. Our team will review your documents and get back to you within 2-3 business days.
+                Your application has been submitted. Our team will review your documents and get back to you within 2–3 business days.
               </p>
               <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl mb-6 text-left">
-                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">What happens next?</p>
-                <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1 list-disc list-inside">
-                  <li>Admin reviews your National ID and application</li>
-                  <li>You will receive an email notification once approved</li>
-                  <li>After approval, you can log in and access your dashboard</li>
+                <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-2">What happens next?</p>
+                <ul className="text-xs text-amber-700 dark:text-amber-400 space-y-1.5 list-disc list-inside">
+                  <li>Admin reviews your National ID and submitted documents</li>
+                  {(pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord') ? (
+                    <li>Once approved, you can log in and start listing your properties</li>
+                  ) : (
+                    <li>Once approved, you can log in and access your full dashboard</li>
+                  )}
+                  <li>You will be notified by email when a decision is made</li>
+                  <li>If rejected, you will receive a reason and can reapply</li>
                 </ul>
               </div>
               <Button className="w-full" onClick={() => navigate('/login')}>Back to Login</Button>
@@ -374,15 +388,20 @@ export function RegisterPage() {
                   <FileText size={20} className="text-amber-600" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Application Required</h2>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Verification Required</h2>
                   <p className="text-xs text-slate-500">
-                    {(pendingFormData?.role === 'agent' || pendingGoogleUser?.role === 'agent') ? 'Agent' : 'Property Manager'} accounts require verification
+                    {(() => {
+                      const role = pendingFormData?.role || pendingGoogleUser?.role || '';
+                      if (role === 'landlord') return 'Landlord accounts require property ownership verification';
+                      if (role === 'agent') return 'Agent accounts require identity verification and admin approval';
+                      return 'Property Manager accounts require identity verification and admin approval';
+                    })()}
                   </p>
                 </div>
               </div>
               <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl mb-6">
                 <p className="text-xs text-blue-700 dark:text-blue-300">
-                  To protect our platform, agents and property managers must submit an application with identity verification. You will not be able to access the dashboard until approved.
+                  To protect our platform and users, this account type requires document verification. You will not be able to access the dashboard until your documents are reviewed and approved by our admin team.
                 </p>
               </div>
               <form onSubmit={handleAppSubmit(onApplicationSubmit)} className="space-y-5">
@@ -402,18 +421,59 @@ export function RegisterPage() {
                   hint="Upload a clear photo of your National ID (front side)"
                   showCamera
                 />
+
+                {/* Additional supporting documents */}
+                <div>
+                  <FileUpload
+                    label="Additional Documents (optional)"
+                    accept="image/*,application/pdf,.pdf,.doc,.docx"
+                    multiple
+                    maxFiles={5}
+                    maxSizeMB={10}
+                    value={additionalDocs}
+                    onChange={setAdditionalDocs}
+                    hint={
+                      (pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord')
+                        ? 'Upload any supporting documents: title deed, agreement of sale, utility bills, or other proof of property ownership (images or PDF)'
+                        : 'Upload any supporting documents: professional certificates, reference letters, business registration, or other relevant documents (images or PDF)'
+                    }
+                    showCamera={false}
+                  />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {[
+                      ...(pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord'
+                        ? ['Title Deed', 'Agreement of Sale', 'Utility Bill', 'Land Certificate']
+                        : ['Business Certificate', 'Professional Certificate', 'Reference Letter', 'Work ID']),
+                    ].map(doc => (
+                      <span key={doc} className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 px-2 py-0.5 rounded-full">
+                        {doc}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
                 <Textarea
-                  label="Experience *"
-                  placeholder="Describe your experience in real estate, property management, or related fields..."
+                  label={
+                    (pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord')
+                      ? 'Tell us about your property/properties *'
+                      : 'Experience *'
+                  }
+                  placeholder={
+                    (pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord')
+                      ? 'Describe the property or properties you own (location, type, number of units)...'
+                      : 'Describe your experience in real estate, property management, or related fields...'
+                  }
                   rows={3}
                   error={appErrors.experience?.message}
                   {...registerApp('experience')}
                 />
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                    Districts you operate in *
+                    {(pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord')
+                      ? 'District(s) where your property is located *'
+                      : 'Districts you operate in *'}
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto pr-1">
                     {DISTRICTS.map(d => (
                       <button
                         key={d}
@@ -438,8 +498,16 @@ export function RegisterPage() {
                   <input type="hidden" {...registerApp('districts')} value={appDistricts} />
                 </div>
                 <Textarea
-                  label="Why do you want to join ITAB? *"
-                  placeholder="Tell us your motivation and what you hope to achieve on the platform..."
+                  label={
+                    (pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord')
+                      ? 'Why are you joining ITAB? *'
+                      : 'Why do you want to join ITAB? *'
+                  }
+                  placeholder={
+                    (pendingFormData?.role === 'landlord' || pendingGoogleUser?.role === 'landlord')
+                      ? 'Tell us why you want to list your property on ITAB and what you expect from the platform...'
+                      : 'Tell us your motivation and what you hope to achieve on the platform...'
+                  }
                   rows={3}
                   error={appErrors.motivation?.message}
                   {...registerApp('motivation')}
@@ -558,7 +626,12 @@ export function RegisterPage() {
               {requiresApplication(watchedRole) && (
                 <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
                   <p className="text-xs text-amber-700 dark:text-amber-400">
-                    Application required: {watchedRole === 'agent' ? 'Agent' : 'Property Manager'} accounts require identity verification and admin approval before you can access the platform.
+                    ⚠️ <strong>Verification required:</strong>{' '}
+                    {watchedRole === 'landlord'
+                      ? 'Landlord accounts require identity verification and admin approval before you can list properties.'
+                      : watchedRole === 'agent'
+                        ? 'Agent accounts require identity verification and admin approval before you can access the platform.'
+                        : 'Property Manager accounts require identity verification and admin approval before you can access the platform.'}
                   </p>
                 </div>
               )}
@@ -679,7 +752,9 @@ export function RegisterPage() {
                   </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{role.desc}</p>
                   {requiresApplication(role.value) && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">Requires application and approval</p>
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+                      ⚠️ Requires document verification & admin approval
+                    </p>
                   )}
                 </div>
                 {isSelected && (

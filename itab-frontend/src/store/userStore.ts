@@ -68,6 +68,10 @@ export interface AgentApplication {
   lastName: string;
   email: string;
   phone: string;
+  role?: string;              // 'agent' | 'property_manager' | 'landlord'
+  nationalIdNumber?: string;
+  nationalIdDoc?: string;     // base64 data URL of the National ID photo
+  additionalDocs?: { name: string; dataUrl: string; type: string }[];
   experience: string;
   districts: string[];
   motivation: string;
@@ -123,6 +127,8 @@ export const useUserStore = create<UserStore>()(
           lastName: 'Kato',
           email: 'moses.kato@gmail.com',
           phone: '0772345678',
+          role: 'agent',
+          nationalIdNumber: 'CM90100012345ABCD',
           experience: '3 years working as a real estate broker in Kampala',
           districts: ['Kampala', 'Wakiso'],
           motivation: 'I want to help landlords find quality tenants and earn commission through ITAB.',
@@ -136,6 +142,8 @@ export const useUserStore = create<UserStore>()(
           lastName: 'Nabirye',
           email: 'fatuma.n@gmail.com',
           phone: '0752987654',
+          role: 'property_manager',
+          nationalIdNumber: 'CF85020098765WXYZ',
           experience: '5 years in property sales and rentals',
           districts: ['Kampala', 'Entebbe', 'Mukono'],
           motivation: 'Looking to expand my client base using a digital platform.',
