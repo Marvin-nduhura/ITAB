@@ -1,18 +1,8 @@
 // ─── User & Auth ────────────────────────────────────────────────────────────
 export type UserRole = 'admin' | 'property_manager' | 'landlord' | 'tenant' | 'agent' | 'vendor' | 'guest';
 
-export interface UserPermissions {
-  canAddProperty?: boolean;
-  canEditProperty?: boolean;
-  canViewPayments?: boolean;
-  canManageUsers?: boolean;
-  canViewAnalytics?: boolean;
-  canSendNotices?: boolean;
-  canAssignVendors?: boolean;
-  canProcessPayouts?: boolean;
-  canViewAllMaintenance?: boolean;
-  canManageDisputes?: boolean;
-}
+// Re-export full permissions from dedicated file
+export type { FullUserPermissions as UserPermissions } from './permissions';
 
 export interface User {
   id: string;
@@ -27,8 +17,8 @@ export interface User {
   suspendedReason?: string;
   suspendedAt?: string;
   kycStatus: 'pending' | 'submitted' | 'approved' | 'rejected';
-  permissions?: UserPermissions;
-  restrictedDistricts?: string[];   // empty = unrestricted
+  permissions?: import('./permissions').FullUserPermissions;
+  restrictedDistricts?: string[];
   approvalStatus?: 'pending' | 'approved' | 'rejected';
   kycDocuments?: { type: string; url: string; uploadedAt: string }[];
   googleId?: string;

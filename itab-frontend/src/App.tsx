@@ -10,7 +10,7 @@ import { useUIStore, applyTheme } from './store/uiStore';
 import { useNotificationStore } from './store/notificationStore';
 import { registerServiceWorker, setupOnlineOfflineListeners } from './lib/sync';
 import { mockNotifications } from './lib/mockData';
-import { routeRoles } from './lib/rbac';
+import { canAccessRoute } from './lib/rbac';
 
 // Lazy-loaded pages
 const LandingPage      = lazy(() => import('./pages/LandingPage').then(m => ({ default: m.LandingPage })));
@@ -63,17 +63,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// Role-guarded route — redirects to dashboard if user lacks permission
+// Role-guarded route — checks both role AND individual permissions
 function RoleRoute({ children, path }: { children: React.ReactNode; path: string }) {
   const { user } = useAuthStore();
   if (!user) return <Navigate to="/login" replace />;
-  const allowed = routeRoles[path];
-  if (allowed && !allowed.includes(user.role)) {
+  if (!canAccessRoute(user, path)) {
     return <Navigate to="/dashboard" replace />;
   }
   return <>{children}</>;
 }
-
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
   if (isAuthenticated) return <Navigate to="/dashboard" replace />;

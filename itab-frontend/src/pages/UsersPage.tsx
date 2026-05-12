@@ -6,27 +6,74 @@ import { Badge } from '../components/ui/Badge';
 import { Avatar } from '../components/ui/Avatar';
 import { Modal } from '../components/ui/Modal';
 import { Input, Select, Textarea } from '../components/ui/Input';
-import { useUserStore, DEFAULT_ROLE_PERMISSIONS } from '../store/userStore';
+import { useUserStore } from '../store/userStore';
 import { useAuthStore } from '../store/authStore';
 import { roleLabels, formatDate, generateId, DISTRICTS } from '../lib/utils';
 import { isAdmin } from '../lib/rbac';
 import { usersApi } from '../lib/api';
+import { DEFAULT_PERMISSIONS, resolvePermissions } from '../lib/defaultPermissions';
+import { PERMISSION_LABELS, PERMISSION_SECTIONS } from '../types/permissions';
+import type { FullUserPermissions } from '../types/permissions';
 import toast from 'react-hot-toast';
-import type { User, UserRole, UserPermissions } from '../types';
+import type { User, UserRole } from '../types';
 
-// ─── Permission labels ────────────────────────────────────────────────────────
-const PERMISSION_LABELS: { key: keyof UserPermissions; label: string; desc: string }[] = [
-  { key: 'canAddProperty',       label: 'Add properties',        desc: 'Can list new properties' },
-  { key: 'canEditProperty',      label: 'Edit properties',       desc: 'Can modify property details' },
-  { key: 'canViewPayments',      label: 'View payments',         desc: 'Can see payment records' },
-  { key: 'canManageUsers',       label: 'Manage users',          desc: 'Can suspend/approve users' },
-  { key: 'canViewAnalytics',     label: 'View analytics',        desc: 'Can access analytics dashboard' },
-  { key: 'canSendNotices',       label: 'Send notices',          desc: 'Can send tenant notices' },
-  { key: 'canAssignVendors',     label: 'Assign vendors',        desc: 'Can assign vendors to jobs' },
-  { key: 'canProcessPayouts',    label: 'Process payouts',       desc: 'Can process landlord payouts' },
-  { key: 'canViewAllMaintenance','label': 'View all maintenance', desc: 'Can see all maintenance requests' },
-  { key: 'canManageDisputes',    label: 'Manage disputes',       desc: 'Can resolve disputes' },
-];
+// ─── Permission section component ────────────────────────────────────────────
+function PermissionSection({
+  label, icon, perms, labels, enabledCount, total, onChange, onToggleAll,
+}: {
+  section?: string;
+  label: string;
+  icon: string;
+  perms: Record<string, boolean>;
+  labels: Record<string, string>;
+  enabledCount: number;
+  total: number;
+  onChange: (key: string, val: boolean) => void;
+  onToggleAll: (val: boolean) => void;
+}) {
+  const allOn = enabledCount === total;
+  const allOff = enabledCount === 0;
+
+  return (
+    <div className="border border-slate-200 dark:border-slate-700 rounded-2xl overflow-hidden">
+      {/* Section header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 dark:bg-slate-800/60">
+        <div className="flex items-center gap-2">
+          <span className="text-base">{icon}</span>
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">{label}</p>
+          <span className="text-xs text-slate-400">{enabledCount}/{total} enabled</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => onToggleAll(true)}
+            className={`text-xs px-2 py-1 rounded-lg font-medium transition-colors ${allOn ? 'bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
+            All on
+          </button>
+          <button type="button" onClick={() => onToggleAll(false)}
+            className={`text-xs px-2 py-1 rounded-lg font-medium transition-colors ${allOff ? 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400' : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
+            All off
+          </button>
+        </div>
+      </div>
+      {/* Permission rows */}
+      <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
+        {Object.entries(perms).map(([key, val]) => (
+          <div key={key} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+            <p className="text-sm text-slate-700 dark:text-slate-300">{labels[key] || key}</p>
+            <button
+              type="button"
+              onClick={() => onChange(key, !val)}
+              className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${val ? 'bg-primary-600' : 'bg-slate-300 dark:bg-slate-600'}`}
+              role="switch"
+              aria-checked={val}
+            >
+              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${val ? 'translate-x-4' : 'translate-x-0.5'}`} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function UsersPage() {
   const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC, updateUserPermissions, updateUserDistricts, changeUserRole, getPendingApprovals, approveUser, rejectUserApproval, updateUser } = useUserStore();
@@ -57,7 +104,7 @@ export function UsersPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [editNotes, setEditNotes] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('tenant');
-  const [editPermissions, setEditPermissions] = useState<UserPermissions>({});
+  const [editPermissions, setEditPermissions] = useState<FullUserPermissions>(() => DEFAULT_PERMISSIONS['tenant']);
   const [editDistricts, setEditDistricts] = useState<string[]>([]);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectModal, setShowRejectModal] = useState(false);
@@ -134,7 +181,7 @@ export function UsersPage() {
     setDetailTab('profile');
     setEditNotes(u.notes || '');
     setEditRole(u.role);
-    setEditPermissions(u.permissions || DEFAULT_ROLE_PERMISSIONS[u.role] || {});
+    setEditPermissions(u.permissions || resolvePermissions(u.role));
     setEditDistricts(u.restrictedDistricts || []);
   };
 
@@ -209,7 +256,7 @@ export function UsersPage() {
 
   const handleResetPermissions = () => {
     if (!detailUser) return;
-    const defaults = DEFAULT_ROLE_PERMISSIONS[detailUser.role] || {};
+    const defaults = resolvePermissions(detailUser.role);
     setEditPermissions(defaults);
     toast('Permissions reset to role defaults', { icon: '🔄' });
   };
@@ -605,25 +652,50 @@ export function UsersPage() {
             {detailTab === 'permissions' && (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm text-slate-500">Toggle individual permissions. Overrides role defaults.</p>
-                  <Button size="sm" variant="secondary" icon={<RotateCcw size={12} />} onClick={handleResetPermissions}>Reset to defaults</Button>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Toggle individual permissions. Overrides role defaults for this user only.
+                  </p>
+                  <Button size="sm" variant="secondary" icon={<RotateCcw size={12} />} onClick={handleResetPermissions}>
+                    Reset to defaults
+                  </Button>
                 </div>
-                <div className="space-y-2">
-                  {PERMISSION_LABELS.map(({ key, label, desc }) => (
-                    <div key={key} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                      <div>
-                        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{label}</p>
-                        <p className="text-xs text-slate-400">{desc}</p>
-                      </div>
-                      <button type="button" onClick={() => setEditPermissions(prev => ({ ...prev, [key]: !prev[key] }))}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${editPermissions[key] ? 'bg-primary-600' : 'bg-slate-300 dark:bg-slate-600'}`}
-                        role="switch" aria-checked={!!editPermissions[key]}>
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${editPermissions[key] ? 'translate-x-6' : 'translate-x-1'}`} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <Button loading={detailLoading} onClick={handleSavePermissions} className="w-full">Save Permissions</Button>
+
+                {/* Sections */}
+                {(Object.keys(PERMISSION_SECTIONS) as (keyof FullUserPermissions)[]).map(section => {
+                  const sectionInfo = PERMISSION_SECTIONS[section];
+                  const sectionPerms = editPermissions[section] as unknown as Record<string, boolean> | undefined;
+                  const sectionLabels = PERMISSION_LABELS[section] as Record<string, string> | undefined;
+                  if (!sectionPerms || !sectionLabels) return null;
+                  const keys = Object.keys(sectionPerms);
+                  const enabledCount = keys.filter(k => sectionPerms[k]).length;
+
+                  return (
+                    <PermissionSection
+                      key={section}
+                      section={section}
+                      label={sectionInfo.label}
+                      icon={sectionInfo.icon}
+                      perms={sectionPerms}
+                      labels={sectionLabels}
+                      enabledCount={enabledCount}
+                      total={keys.length}
+                      onChange={(key: string, val: boolean) => {
+                        setEditPermissions(prev => ({
+                          ...prev,
+                          [section]: { ...(prev[section] as unknown as Record<string, boolean>), [key]: val },
+                        }));
+                      }}
+                      onToggleAll={(val: boolean) => {
+                        const updated = Object.fromEntries(keys.map(k => [k, val]));
+                        setEditPermissions(prev => ({ ...prev, [section]: updated }));
+                      }}
+                    />
+                  );
+                })}
+
+                <Button loading={detailLoading} onClick={handleSavePermissions} className="w-full">
+                  Save All Permissions
+                </Button>
               </div>
             )}
 

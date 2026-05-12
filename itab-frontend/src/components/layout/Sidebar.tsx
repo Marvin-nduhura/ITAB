@@ -5,10 +5,12 @@ import {
   Users, BarChart3, MessageSquare, Bell, Settings, LogOut, X,
   Home, DollarSign, FileText, Star, Briefcase,
   Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen, Building2, Shield,
-} from 'lucide-react';import { useAuthStore } from '../../store/authStore';
+} from 'lucide-react';
+import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
 import { Avatar } from '../ui/Avatar';
 import { cn } from '../../lib/utils';
+import { canAccessRoute } from '../../lib/rbac';
 import type { UserRole } from '../../types';
 
 interface NavItem {
@@ -91,7 +93,19 @@ export function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
-  const filtered = navItems.filter(item => user && item.roles.includes(user.role));
+  // Filter nav items: must match role AND pass permission check if one is defined
+  const filtered = navItems.filter(item => {
+    if (!user) return false;
+    if (!item.roles.includes(user.role)) return false;
+    // Additional permission checks for sensitive items
+    if (item.to === '/analytics') return canAccessRoute(user, '/analytics');
+    if (item.to === '/users') return canAccessRoute(user, '/users');
+    if (item.to === '/vendors' || item.to === '/admin/vetting') return canAccessRoute(user, item.to);
+    if (item.to === '/admin/fees') return canAccessRoute(user, '/admin/fees');
+    if (item.to === '/admin/audit') return canAccessRoute(user, '/admin/audit');
+    if (item.to === '/admin/announcements') return canAccessRoute(user, '/admin/announcements');
+    return true;
+  });
 
   const handleLogout = () => {
     logout();

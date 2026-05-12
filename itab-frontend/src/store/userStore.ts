@@ -1,42 +1,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, UserRole, UserPermissions } from '../types';
+import type { User, UserRole } from '../types';
+import type { FullUserPermissions } from '../types/permissions';
 import { mockUsers } from '../lib/mockData';
 import { generateId } from '../lib/utils';
 
-// ─── Default permissions per role ────────────────────────────────────────────
-export const DEFAULT_ROLE_PERMISSIONS: Record<string, UserPermissions> = {
-  admin: {
-    canAddProperty: true, canEditProperty: true, canViewPayments: true,
-    canManageUsers: true, canViewAnalytics: true, canSendNotices: true,
-    canAssignVendors: true, canProcessPayouts: true, canViewAllMaintenance: true, canManageDisputes: true,
-  },
-  property_manager: {
-    canAddProperty: true, canEditProperty: true, canViewPayments: true,
-    canManageUsers: false, canViewAnalytics: true, canSendNotices: true,
-    canAssignVendors: true, canProcessPayouts: true, canViewAllMaintenance: true, canManageDisputes: false,
-  },
-  landlord: {
-    canAddProperty: true, canEditProperty: true, canViewPayments: true,
-    canManageUsers: false, canViewAnalytics: true, canSendNotices: false,
-    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
-  },
-  agent: {
-    canAddProperty: true, canEditProperty: false, canViewPayments: false,
-    canManageUsers: false, canViewAnalytics: false, canSendNotices: false,
-    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
-  },
-  tenant: {
-    canAddProperty: false, canEditProperty: false, canViewPayments: true,
-    canManageUsers: false, canViewAnalytics: false, canSendNotices: false,
-    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
-  },
-  vendor: {
-    canAddProperty: false, canEditProperty: false, canViewPayments: false,
-    canManageUsers: false, canViewAnalytics: false, canSendNotices: false,
-    canAssignVendors: false, canProcessPayouts: false, canViewAllMaintenance: false, canManageDisputes: false,
-  },
-};
+// ─── Default permissions per role — now in lib/defaultPermissions.ts ─────────
+export { DEFAULT_PERMISSIONS as DEFAULT_ROLE_PERMISSIONS } from '../lib/defaultPermissions';
 
 export type AuditAction =
   | 'user_suspended' | 'user_banned' | 'user_unsuspended' | 'user_invited'
@@ -97,7 +67,7 @@ interface UserStore {
   isSuspended: (email: string) => { suspended: boolean; reason?: string };
 
   // New permission/district/role management
-  updateUserPermissions: (id: string, permissions: UserPermissions) => void;
+  updateUserPermissions: (id: string, permissions: FullUserPermissions) => void;
   updateUserDistricts: (id: string, districts: string[]) => void;
   changeUserRole: (id: string, role: UserRole) => void;
   getPendingApprovals: () => User[];
