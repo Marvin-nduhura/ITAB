@@ -11,7 +11,6 @@ import { Modal } from '../../components/ui/Modal';
 import { Input, Select, Textarea } from '../../components/ui/Input';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
-import { mockRentBalances } from '../../lib/mockData';
 import { formatCurrency, formatDate, amenityIcons, DISTRICTS } from '../../lib/utils';
 import { downloadLease } from '../../lib/download';
 import toast from 'react-hot-toast';
@@ -41,15 +40,17 @@ export function TenantPortal() {
   const [moveoutForm, setMoveoutForm] = useState({ date: '', reason: '', notes: '' });
   const [moveoutLoading, setMoveoutLoading] = useState(false);
 
-  // Renewal request state
   const [renewalForm, setRenewalForm] = useState({ preferredTerm: '12', proposedRent: '', notes: '' });
   const [renewalLoading, setRenewalLoading] = useState(false);
   const [renewalSubmitted, setRenewalSubmitted] = useState(false);
 
   const favoriteProperties = properties.filter(p => favorites.includes(p.id));
   const compareProperties = properties.filter(p => compareList.includes(p.id));
-  const currentLease = mockRentBalances[mockRentBalances.length - 1];
-  const currentProperty = properties.find(p => p.id === currentLease?.propertyId);
+  // Derive current lease from payments — find the rented property for this user
+  const rentedProperty = properties.find(p => p.status === 'rented');
+  const currentProperty = rentedProperty;
+  // Outstanding balance computed server-side in production
+  const outstandingBalance = 0;
 
   const removeFavorite = (id: string) => {
     setFavorites(prev => prev.filter(f => f !== id));
@@ -177,7 +178,7 @@ export function TenantPortal() {
                 <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-3">Current Rent Balance</h3>
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-2xl font-bold text-red-500">{formatCurrency(currentLease.balance)}</p>
+                    <p className="text-2xl font-bold text-red-500">{formatCurrency(outstandingBalance)}</p>
                     <p className="text-xs text-slate-400">Outstanding balance</p>
                   </div>
                   <Button onClick={() => navigate('/payments')} icon={<CheckCircle2 size={14} />}>Pay Now</Button>

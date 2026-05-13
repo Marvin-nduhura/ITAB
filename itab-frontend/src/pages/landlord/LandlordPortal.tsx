@@ -11,7 +11,7 @@ import { Input, Select, Textarea } from '../../components/ui/Input';
 import { StatCard } from '../../components/ui/Card';
 import { usePropertyStore } from '../../store/propertyStore';
 import { useAuthStore } from '../../store/authStore';
-import { mockPayouts } from '../../lib/mockData';
+import { useDataStore } from '../../store/dataStore';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { downloadStatement } from '../../lib/download';
 import toast from 'react-hot-toast';
@@ -27,6 +27,7 @@ interface PayoutDetails {
 export function LandlordPortal() {
   const { user } = useAuthStore();
   const { properties } = usePropertyStore();
+  const { payouts: allPayouts } = useDataStore();
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [showDisputeModal, setShowDisputeModal] = useState(false);
   const [showStatementModal, setShowStatementModal] = useState(false);
@@ -38,7 +39,7 @@ export function LandlordPortal() {
 
   // Landlord's properties
   const myProperties = properties.filter(p => p.landlordId === user?.id);
-  const myPayouts = mockPayouts.filter(p => p.landlordId === user?.id || p.landlordId === 'u3'); // demo fallback
+  const myPayouts = allPayouts.filter(p => p.landlordId === user?.id);
 
   // Financial summary
   const totalGross = myPayouts.reduce((s, p) => s + p.grossRent, 0);

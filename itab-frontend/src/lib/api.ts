@@ -133,3 +133,141 @@ export const vendorsApi = {
   update: (id: string, data: unknown) => api.put(`/vendors/${id}`, data),
   rate:   (id: string, rating: number) => api.patch(`/vendors/${id}/rate`, { rating }),
 };
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+export const notificationsApi = {
+  list:        (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/notifications', { params }),
+  markRead:    (id: string) => api.patch(`/notifications/${id}/read`),
+  markAllRead: () => api.patch('/notifications/read-all'),
+};
+
+// ─── Transactions ─────────────────────────────────────────────────────────────
+export const transactionsApi = {
+  list:   (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/transactions', { params }),
+  retry:  (id: string) => api.post(`/transactions/${id}/retry`),
+  refund: (id: string) => api.post(`/transactions/${id}/refund`),
+};
+
+// ─── Vendor Jobs ──────────────────────────────────────────────────────────────
+export const vendorJobsApi = {
+  list:   (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/vendor-jobs', { params }),
+  create: (data: unknown) => api.post<ApiResponse<unknown>>('/vendor-jobs', data),
+  update: (id: string, data: unknown) => api.put(`/vendor-jobs/${id}`, data),
+};
+
+// ─── Contracts ────────────────────────────────────────────────────────────────
+export const contractsApi = {
+  list:   (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/contracts', { params }),
+  create: (data: unknown) => api.post<ApiResponse<unknown>>('/contracts', data),
+  update: (id: string, data: unknown) => api.put(`/contracts/${id}`, data),
+};
+
+// ─── Documents ────────────────────────────────────────────────────────────────
+export const documentsApi = {
+  list:    (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/documents', { params }),
+  upload:  (data: unknown) => api.post<ApiResponse<unknown>>('/documents', data),
+  approve: (id: string, notes?: string) => api.patch(`/documents/${id}/approve`, { notes }),
+  reject:  (id: string, notes: string) => api.patch(`/documents/${id}/reject`, { notes }),
+  delete:  (id: string) => api.delete(`/documents/${id}`),
+};
+
+// ─── Notices ──────────────────────────────────────────────────────────────────
+export const noticesApi = {
+  list:        (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/notices', { params }),
+  send:        (data: unknown) => api.post<ApiResponse<unknown>>('/notices', data),
+  acknowledge: (id: string) => api.patch(`/notices/${id}/acknowledge`),
+  markRead:    (id: string) => api.patch(`/notices/${id}/read`),
+};
+
+// ─── Disputes ─────────────────────────────────────────────────────────────────
+export const disputesApi = {
+  list:    (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/disputes', { params }),
+  raise:   (data: unknown) => api.post<ApiResponse<unknown>>('/disputes', data),
+  resolve: (id: string, resolution: string) => api.patch(`/disputes/${id}/resolve`, { resolution }),
+  dismiss: (id: string) => api.patch(`/disputes/${id}/dismiss`),
+};
+
+// ─── Announcements ────────────────────────────────────────────────────────────
+export const announcementsApi = {
+  list: (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/announcements', { params }),
+  send: (data: unknown) => api.post<ApiResponse<unknown>>('/announcements', data),
+};
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+export const auditLogsApi = {
+  list: (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/audit-logs', { params }),
+  log:  (data: unknown) => api.post('/audit-logs', data),
+};
+
+// ─── Agent Applications ───────────────────────────────────────────────────────
+export const agentApplicationsApi = {
+  list:    (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/agent-applications', { params }),
+  submit:  (data: unknown) => api.post<ApiResponse<unknown>>('/agent-applications', data),
+  approve: (id: string, note?: string) => api.patch(`/agent-applications/${id}/approve`, { note }),
+  reject:  (id: string, note?: string) => api.patch(`/agent-applications/${id}/reject`, { note }),
+};
+
+// ─── Payment Preferences ──────────────────────────────────────────────────────
+export const paymentPreferencesApi = {
+  get:  (userId: string) => api.get<ApiResponse<unknown>>(`/payment-preferences/${userId}`),
+  save: (data: unknown) => api.post<ApiResponse<unknown>>('/payment-preferences', data),
+};
+
+// ─── Bulk Sync ────────────────────────────────────────────────────────────────
+// Calls all relevant endpoints in parallel and returns combined data.
+// Each key maps to the resolved data array (or null on error).
+export const syncApi = {
+  bulkSync: async () => {
+    const settle = <T>(p: Promise<{ data: ApiResponse<T> }>) =>
+      p.then(r => r.data?.data ?? null).catch(() => null);
+
+    const [
+      properties,
+      inspections,
+      payments,
+      transactions,
+      maintenance,
+      payouts,
+      vendors,
+      vendorJobs,
+      documents,
+      notices,
+      disputes,
+      announcements,
+      notifications,
+      conversations,
+    ] = await Promise.all([
+      settle(propertiesApi.list()),
+      settle(inspectionsApi.list()),
+      settle(paymentsApi.list()),
+      settle(transactionsApi.list()),
+      settle(maintenanceApi.list()),
+      settle(payoutsApi.list()),
+      settle(vendorsApi.list()),
+      settle(vendorJobsApi.list()),
+      settle(documentsApi.list()),
+      settle(noticesApi.list()),
+      settle(disputesApi.list()),
+      settle(announcementsApi.list()),
+      settle(notificationsApi.list()),
+      settle(messagesApi.conversations()),
+    ]);
+
+    return {
+      properties,
+      inspections,
+      payments,
+      transactions,
+      maintenance,
+      payouts,
+      vendors,
+      vendorJobs,
+      documents,
+      notices,
+      disputes,
+      announcements,
+      notifications,
+      conversations,
+    };
+  },
+};

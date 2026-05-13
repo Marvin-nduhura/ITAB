@@ -5,7 +5,7 @@ import { Building2, Mail, ArrowLeft, CheckCircle2, KeyRound, Eye, EyeOff } from 
 import toast from 'react-hot-toast';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
-import { mockUsers } from '../../lib/mockData';
+import { authApi } from '../../lib/api';
 
 type Step = 'email' | 'otp' | 'reset' | 'done';
 
@@ -25,20 +25,14 @@ export function ForgotPasswordPage() {
       toast.error('Please enter a valid email address');
       return;
     }
-    const userExists = mockUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
     setLoading(true);
-    await new Promise(r => setTimeout(r, 1000));
-    setLoading(false);
-
-    if (!userExists) {
-      // Don't reveal whether email exists — security best practice
-      toast.success('If that email is registered, you will receive a reset code shortly.');
-      setStep('otp');
-      return;
+    try {
+      await authApi.forgotPassword({ email });
+    } catch {
+      // Always show success — don't reveal if email exists (security)
     }
-
-    // In production: send real OTP via SMS/email
-    // For demo: show OTP in toast
+    setLoading(false);
+    // In production: real OTP sent via SMS/email. For demo: show code in toast.
     toast.success(`OTP sent! (Demo code: ${generatedOtp})`, { duration: 10000 });
     setStep('otp');
   };

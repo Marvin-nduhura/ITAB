@@ -1,22 +1,24 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Property } from '../types';
-import { mockProperties } from '../lib/mockData';
 import { generateId } from '../lib/utils';
 
 interface PropertyStore {
   properties: Property[];
-  customAmenities: string[];       // user-defined amenities
-  customPropertyTypes: string[];   // user-defined property types
-  customDistricts: string[];       // user-defined districts
+  customAmenities: string[];
+  customPropertyTypes: string[];
+  customDistricts: string[];
+  lastSyncedAt: string | null;
 
-  addProperty: (p: Omit<Property, 'id' | 'createdAt' | 'updatedAt' | 'viewCount'>) => Property;
+  addProperty: (p: Omit<Property, 'id' | 'createdAt' | 'updatedAt' | 'viewCount'> | Property) => Property;
   updateProperty: (id: string, updates: Partial<Property>) => void;
   deleteProperty: (id: string) => void;
   addPhoto: (propertyId: string, photoUrl: string) => void;
   removePhoto: (propertyId: string, photoUrl: string) => void;
   incrementViews: (id: string) => void;
+  setLastSynced: () => void;
 
+  setProperties: (props: Property[]) => void;
   addCustomAmenity: (name: string) => void;
   addCustomPropertyType: (name: string) => void;
   addCustomDistrict: (name: string) => void;
@@ -25,17 +27,32 @@ interface PropertyStore {
 export const usePropertyStore = create<PropertyStore>()(
   persist(
     (set, get) => ({
-      properties: mockProperties,
+      properties: [],
       customAmenities: [],
       customPropertyTypes: [],
       customDistricts: [],
+      lastSyncedAt: null,
 
       addProperty: (data) => {
+        // If the data already has an id (coming from backend sync), use it as-is
+        if ('id' in data && data.id) {
+          const existing = get().properties.find(p => p.id === data.id);
+          if (existing) {
+            // Update existing with backend data
+            set(s => ({
+              properties: s.properties.map(p => p.id === data.id ? { ...p, ...(data as Property) } : p),
+            }));
+            return data as Property;
+          }
+          // Add new property from backend
+          set(s => ({ properties: [data as Property, ...s.properties] }));
+          return data as Property;
+        }
+        // New property created locally
         const now = new Date().toISOString();
         const newProp: Property = {
-          ...data,
+          ...(data as Omit<Property, 'id' | 'createdAt' | 'updatedAt' | 'viewCount'>),
           id: `p_${generateId()}`,
-          // Sanitize coordinates — NaN crashes Leaflet
           latitude:  (data.latitude && !isNaN(data.latitude))  ? data.latitude  : 0,
           longitude: (data.longitude && !isNaN(data.longitude)) ? data.longitude : 0,
           viewCount: 0,
@@ -82,6 +99,12 @@ export const usePropertyStore = create<PropertyStore>()(
         }));
       },
 
+      setLastSynced: () => {
+        set({ lastSyncedAt: new Date().toISOString() });
+      },
+
+      setProperties: (props: Property[]) => set({ properties: props, lastSyncedAt: new Date().toISOString() }),
+
       addCustomAmenity: (name) => {
         const key = name.toLowerCase().replace(/\s+/g, '_');
         if (!get().customAmenities.includes(key)) {
@@ -105,13 +128,12 @@ export const usePropertyStore = create<PropertyStore>()(
     }),
     {
       name: 'itab_properties',
-      // Don't persist mock data on first load — only persist user-added data
       partialize: (s) => ({
-        // Only persist properties that were user-created (id starts with p_)
-        properties: s.properties.filter(p => p.id.startsWith('p_')),
+        properties: s.properties,
         customAmenities: s.customAmenities,
         customPropertyTypes: s.customPropertyTypes,
         customDistricts: s.customDistricts,
+        lastSyncedAt: s.lastSyncedAt,
       }),
       merge: (persisted: unknown, current) => {
         const p = persisted as Partial<PropertyStore>;
@@ -122,13 +144,11 @@ export const usePropertyStore = create<PropertyStore>()(
         }));
         return {
           ...current,
-          properties: [
-            ...sanitize(p.properties || []),
-            ...mockProperties.filter(mp => !(p.properties || []).find(pp => pp.id === mp.id)),
-          ],
+          properties: sanitize(p.properties || []),
           customAmenities: p.customAmenities || [],
           customPropertyTypes: p.customPropertyTypes || [],
           customDistricts: p.customDistricts || [],
+          lastSyncedAt: p.lastSyncedAt || null,
         };
       },
     }

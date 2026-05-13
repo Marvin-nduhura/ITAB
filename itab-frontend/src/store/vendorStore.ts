@@ -1,13 +1,16 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Vendor, VendorJob, VendorRating } from '../types';
-import { mockVendors, mockVendorJobs } from '../lib/mockData';
 import { generateId } from '../lib/utils';
 
 interface VendorStore {
   vendors: Vendor[];
   jobs: VendorJob[];
   ratings: VendorRating[];
+
+  // Sync setters (called by useBackendSync)
+  setVendors: (vendors: Vendor[]) => void;
+  setJobs: (jobs: VendorJob[]) => void;
 
   // Vendor CRUD
   addVendor: (v: Omit<Vendor, 'id' | 'rating' | 'totalRatings' | 'totalJobs' | 'completedJobs' | 'joinedAt'>) => Vendor;
@@ -38,10 +41,15 @@ interface VendorStore {
 export const useVendorStore = create<VendorStore>()(
   persist(
     (set, get) => ({
-      vendors: mockVendors,
-      jobs: mockVendorJobs,
+      vendors: [],
+      jobs: [],
       ratings: [],
 
+      // ── Sync setters ──────────────────────────────────────────────────────
+      setVendors: (vendors) => set({ vendors }),
+      setJobs:    (jobs)    => set({ jobs }),
+
+      // ── Vendor CRUD ───────────────────────────────────────────────────────
       addVendor: (data) => {
         const vendor: Vendor = {
           ...data,
@@ -72,6 +80,7 @@ export const useVendorStore = create<VendorStore>()(
         set(s => ({ vendors: s.vendors.map(v => v.id === id ? { ...v, isVerified: true } : v) }));
       },
 
+      // ── Job management ────────────────────────────────────────────────────
       assignJob: (data) => {
         const job: VendorJob = {
           ...data,
@@ -134,6 +143,7 @@ export const useVendorStore = create<VendorStore>()(
         }));
       },
 
+      // ── Ratings ───────────────────────────────────────────────────────────
       rateVendor: (vendorId, jobId, ratedBy, ratedByName, rating, comment) => {
         const newRating: VendorRating = {
           id: `r_${generateId()}`,
@@ -155,10 +165,11 @@ export const useVendorStore = create<VendorStore>()(
         });
       },
 
-      getVendorById: (id) => get().vendors.find(v => v.id === id),
-      getVendorsByCategory: (category) => get().vendors.filter(v => v.category === category && v.isActive && !v.isSuspended),
-      getJobsByVendor: (vendorId) => get().jobs.filter(j => j.vendorId === vendorId),
-      getJobsByMaintenance: (maintenanceId) => get().jobs.filter(j => j.maintenanceRequestId === maintenanceId),
+      // ── Queries ───────────────────────────────────────────────────────────
+      getVendorById:       (id)       => get().vendors.find(v => v.id === id),
+      getVendorsByCategory:(category) => get().vendors.filter(v => v.category === category && v.isActive && !v.isSuspended),
+      getJobsByVendor:     (vendorId) => get().jobs.filter(j => j.vendorId === vendorId),
+      getJobsByMaintenance:(maintenanceId) => get().jobs.filter(j => j.maintenanceRequestId === maintenanceId),
       getAvailableVendors: (category) => get().vendors.filter(v =>
         v.isActive && !v.isSuspended && (!category || v.category === category)
       ),
@@ -166,22 +177,16 @@ export const useVendorStore = create<VendorStore>()(
     {
       name: 'itab_vendors',
       partialize: (s) => ({
-        vendors: s.vendors.filter(v => v.id.startsWith('v_')), // only persist user-added
-        jobs: s.jobs.filter(j => j.id.startsWith('j_')),
+        vendors: s.vendors,
+        jobs: s.jobs,
         ratings: s.ratings,
       }),
       merge: (persisted: unknown, current) => {
         const p = persisted as Partial<VendorStore>;
         return {
           ...current,
-          vendors: [
-            ...(p.vendors || []),
-            ...mockVendors.filter(mv => !(p.vendors || []).find(pv => pv.id === mv.id)),
-          ],
-          jobs: [
-            ...(p.jobs || []),
-            ...mockVendorJobs.filter(mj => !(p.jobs || []).find(pj => pj.id === mj.id)),
-          ],
+          vendors: p.vendors || [],
+          jobs:    p.jobs    || [],
           ratings: p.ratings || [],
         };
       },

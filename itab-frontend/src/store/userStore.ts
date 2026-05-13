@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { User, UserRole } from '../types';
 import type { FullUserPermissions } from '../types/permissions';
-import { mockUsers } from '../lib/mockData';
 import { generateId } from '../lib/utils';
 
 // ─── Default permissions per role — now in lib/defaultPermissions.ts ─────────
@@ -56,6 +55,9 @@ interface UserStore {
   auditLogs: AuditLog[];
   agentApplications: AgentApplication[];
 
+  // Sync setter (called by useBackendSync)
+  setUsers: (users: User[]) => void;
+
   suspendUser: (id: string, reason: string, performedBy?: { id: string; name: string; role: string }) => void;
   banUser: (id: string, reason: string, performedBy?: { id: string; name: string; role: string }) => void;
   unsuspendUser: (id: string, performedBy?: { id: string; name: string; role: string }) => void;
@@ -86,41 +88,12 @@ interface UserStore {
 export const useUserStore = create<UserStore>()(
   persist(
     (set, get) => ({
-      users: mockUsers,
+      users: [],
       auditLogs: [],
-      agentApplications: [
-        // Seed one pending application for demo
-        {
-          id: 'app1',
-          userId: 'u_app1',
-          firstName: 'Moses',
-          lastName: 'Kato',
-          email: 'moses.kato@gmail.com',
-          phone: '0772345678',
-          role: 'agent',
-          nationalIdNumber: 'CM90100012345ABCD',
-          experience: '3 years working as a real estate broker in Kampala',
-          districts: ['Kampala', 'Wakiso'],
-          motivation: 'I want to help landlords find quality tenants and earn commission through ITAB.',
-          status: 'pending',
-          createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-        {
-          id: 'app2',
-          userId: 'u_app2',
-          firstName: 'Fatuma',
-          lastName: 'Nabirye',
-          email: 'fatuma.n@gmail.com',
-          phone: '0752987654',
-          role: 'property_manager',
-          nationalIdNumber: 'CF85020098765WXYZ',
-          experience: '5 years in property sales and rentals',
-          districts: ['Kampala', 'Entebbe', 'Mukono'],
-          motivation: 'Looking to expand my client base using a digital platform.',
-          status: 'pending',
-          createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
-        },
-      ],
+      agentApplications: [],
+
+      // ── Sync setter ───────────────────────────────────────────────────────
+      setUsers: (users) => set({ users }),
 
       suspendUser: (id, reason, performedBy) => {
         set(s => ({
@@ -383,15 +356,11 @@ export const useUserStore = create<UserStore>()(
       partialize: (s) => ({ users: s.users, auditLogs: s.auditLogs, agentApplications: s.agentApplications }),
       merge: (persisted: unknown, current) => {
         const p = persisted as Partial<UserStore>;
-        const persistedUsers = p.users || [];
         return {
           ...current,
-          users: mockUsers.map(mu => {
-            const saved = persistedUsers.find(pu => pu.id === mu.id);
-            return saved ? { ...mu, ...saved } : mu;
-          }),
+          users: p.users || [],
           auditLogs: p.auditLogs || [],
-          agentApplications: p.agentApplications || current.agentApplications,
+          agentApplications: p.agentApplications || [],
         };
       },
     }

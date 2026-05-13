@@ -4,18 +4,12 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useNotificationStore } from '../store/notificationStore';
-import { mockNotifications } from '../lib/mockData';
 import { timeAgo } from '../lib/utils';
-import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 export function NotificationsPage() {
-  const { notifications, setNotifications, markRead, markAllRead, unreadCount } = useNotificationStore();
+  const { notifications, markRead, markAllRead, unreadCount } = useNotificationStore();
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (notifications.length === 0) setNotifications(mockNotifications);
-  }, []);
 
   const typeColors: Record<string, 'blue' | 'green' | 'yellow' | 'red' | 'purple'> = {
     payment: 'green', inspection: 'blue', maintenance: 'yellow', payout: 'purple', system: 'red', alert: 'red', message: 'blue',

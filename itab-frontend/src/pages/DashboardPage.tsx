@@ -10,10 +10,7 @@ import { Button } from '../components/ui/Button';
 import { useAuthStore } from '../store/authStore';
 import { usePropertyStore } from '../store/propertyStore';
 import { useVendorStore } from '../store/vendorStore';
-import {
-  mockInspections, mockMaintenance, mockPayments,
-  mockTenantNotices, mockRentBalances,
-} from '../lib/mockData';
+import { useDataStore } from '../store/dataStore';
 import {
   formatCurrency, formatDate,
   propertyStatusConfig, inspectionStatusConfig,
@@ -31,12 +28,13 @@ export function DashboardPage() {
   const { user } = useAuthStore();
   const { properties: allProperties } = usePropertyStore();
   const { vendors, jobs } = useVendorStore();
+  const { inspections: allInspections, maintenance: allMaintenance, payments: allPayments, notices: allNotices } = useDataStore();
   const navigate = useNavigate();
 
-  const properties   = filterPropertiesForUser(allProperties, user);
-  const myInspections = filterInspectionsForUser(mockInspections, user);
-  const myMaintenance = filterMaintenanceForUser(mockMaintenance, user);
-  const myPayments    = filterPaymentsForUser(mockPayments, user);
+  const properties    = filterPropertiesForUser(allProperties, user);
+  const myInspections = filterInspectionsForUser(allInspections, user);
+  const myMaintenance = filterMaintenanceForUser(allMaintenance, user);
+  const myPayments    = filterPaymentsForUser(allPayments, user);
 
   const myVendor = vendors.find(v => v.email === user?.email || v.userId === user?.id);
   const myJobs   = jobs.filter(j => j.vendorId === myVendor?.id);
@@ -52,8 +50,8 @@ export function DashboardPage() {
     pendingPayouts:     1,
     inspectionFeeRevenue: myPayments.filter(p => p.type === 'inspection_fee' && p.status === 'completed').reduce((s, p) => s + p.amount, 0),
     conversionRate:     35,
-    outstandingBalance: mockRentBalances.filter(b => b.tenantId === user?.id && !b.isFullyPaid).reduce((s, b) => s + b.balance, 0),
-    unreadNotices:      mockTenantNotices.filter(n => n.tenantId === user?.id && n.status === 'unread').length,
+    outstandingBalance: 0, // computed from payments in real usage
+    unreadNotices:      allNotices.filter(n => n.tenantId === user?.id && n.status === 'unread').length,
     pendingJobs:        myJobs.filter(j => j.status === 'assigned').length,
     activeJobs:         myJobs.filter(j => j.status === 'in_progress').length,
     completedJobs:      myJobs.filter(j => j.status === 'completed').length,

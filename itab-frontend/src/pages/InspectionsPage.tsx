@@ -10,7 +10,7 @@ import { Modal } from '../components/ui/Modal';
 import { EmptyState } from '../components/ui/EmptyState';
 import { QRCodeDisplay } from '../components/ui/QRCodeDisplay';
 import { useAuthStore } from '../store/authStore';
-import { mockInspections } from '../lib/mockData';
+import { useDataStore } from '../store/dataStore';
 import { formatCurrency, formatDate, inspectionStatusConfig, INSPECTION_FEE } from '../lib/utils';
 import { downloadReceipt } from '../lib/download';
 import { filterInspectionsForUser } from '../lib/rbac';
@@ -111,8 +111,9 @@ function DeclineLeaseModal({ open, inspection, onClose, onConfirm }: DeclineModa
 export function InspectionsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
+  const { inspections: allInspections } = useDataStore();
   // Only show inspections this user is allowed to see
-  const [inspections, setInspections] = useState<Inspection[]>(() => filterInspectionsForUser(mockInspections, user));
+  const [inspections, setInspections] = useState<Inspection[]>(() => filterInspectionsForUser(allInspections, user));
   const [selected, setSelected] = useState<Inspection | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [showDeclineModal, setShowDeclineModal] = useState(false);

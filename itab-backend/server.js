@@ -20,8 +20,16 @@ const pool = new Pool({
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
-app.use(express.json({ limit: '10mb' }));
+app.use(cors({
+  origin: [
+    process.env.FRONTEND_URL || 'http://localhost:5173',
+    'https://itab-frontend.onrender.com',
+    'http://localhost:5173',
+    'http://localhost:4173',
+  ],
+  credentials: true,
+}));
+app.use(express.json({ limit: '20mb' }));
 app.use(morgan('dev'));
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
@@ -45,10 +53,455 @@ function requireRole(...roles) {
   };
 }
 
+// ─── Format helpers ───────────────────────────────────────────────────────────
+function formatUser(u) {
+  if (!u) return null;
+  return {
+    id: u.id,
+    email: u.email,
+    phone: u.phone,
+    firstName: u.first_name,
+    lastName: u.last_name,
+    role: u.role,
+    avatar: u.avatar,
+    isVerified: u.is_verified,
+    isSuspended: u.is_suspended,
+    suspendedReason: u.suspended_reason,
+    suspendedAt: u.suspended_at,
+    kycStatus: u.kyc_status,
+    permissions: u.permissions,
+    restrictedDistricts: u.restricted_districts,
+    approvalStatus: u.approval_status,
+    googleId: u.google_id,
+    notes: u.notes,
+    createdAt: u.created_at,
+    updatedAt: u.updated_at,
+  };
+}
+
+function formatProperty(p) {
+  if (!p) return null;
+  return {
+    id: p.id,
+    title: p.title,
+    description: p.description,
+    type: p.type,
+    status: p.status,
+    address: p.address,
+    district: p.district,
+    latitude: parseFloat(p.latitude) || 0,
+    longitude: parseFloat(p.longitude) || 0,
+    bedrooms: p.bedrooms,
+    bathrooms: p.bathrooms,
+    squareFootage: p.square_footage,
+    rentPrice: p.rent_price,
+    deposit: p.deposit,
+    availableFrom: p.available_from,
+    photos: p.photos || [],
+    amenities: p.amenities || [],
+    managementFeePercent: p.management_fee_percent,
+    itabFeePercent: p.itab_fee_percent,
+    isFeatured: p.is_featured,
+    tourUrl: p.tour_url,
+    managerId: p.manager_id,
+    managerName: p.manager_name,
+    landlordId: p.landlord_id,
+    landlordName: p.landlord_name,
+    tenantId: p.tenant_id,
+    leaseStart: p.lease_start,
+    leaseEnd: p.lease_end,
+    viewCount: p.view_count || 0,
+    createdAt: p.created_at,
+    updatedAt: p.updated_at,
+  };
+}
+
+function formatInspection(i) {
+  if (!i) return null;
+  return {
+    id: i.id,
+    propertyId: i.property_id,
+    propertyTitle: i.property_title,
+    propertyAddress: i.property_address,
+    tenantId: i.tenant_id,
+    tenantName: i.tenant_name,
+    managerId: i.manager_id,
+    scheduledDate: i.scheduled_date,
+    scheduledTime: i.scheduled_time,
+    status: i.status,
+    feeAmount: i.fee_amount,
+    feePaid: i.fee_paid,
+    paymentMethod: i.payment_method,
+    paymentRef: i.payment_ref,
+    creditApplied: i.credit_applied,
+    qrCode: i.qr_code,
+    notes: i.notes,
+    noShowCount: i.no_show_count,
+    rescheduleCount: i.reschedule_count,
+    leaseDeclined: i.lease_declined,
+    leaseDeclinedReason: i.lease_declined_reason,
+    leaseDeclinedAt: i.lease_declined_at,
+    createdAt: i.created_at,
+  };
+}
+
+function formatPayment(p) {
+  if (!p) return null;
+  return {
+    id: p.id,
+    type: p.type,
+    amount: p.amount,
+    currency: p.currency,
+    status: p.status,
+    method: p.method,
+    reference: p.reference,
+    propertyId: p.property_id,
+    propertyTitle: p.property_title,
+    tenantId: p.tenant_id,
+    tenantName: p.tenant_name,
+    landlordId: p.landlord_id,
+    inspectionCreditApplied: p.inspection_credit_applied,
+    rentPeriod: p.rent_period,
+    isPartial: p.is_partial,
+    receiptUrl: p.receipt_url,
+    createdAt: p.created_at,
+    paidAt: p.paid_at,
+  };
+}
+
+function formatTransaction(t) {
+  if (!t) return null;
+  return {
+    id: t.id,
+    type: t.type,
+    senderId: t.sender_id,
+    senderName: t.sender_name,
+    senderRole: t.sender_role,
+    senderMethod: t.sender_method,
+    senderPhone: t.sender_phone,
+    receiverId: t.receiver_id,
+    receiverName: t.receiver_name,
+    receiverRole: t.receiver_role,
+    receiverMethod: t.receiver_method,
+    receiverPhone: t.receiver_phone,
+    receiverBankDetails: t.receiver_bank_details,
+    amount: t.amount,
+    currency: t.currency,
+    reference: t.reference,
+    status: t.status,
+    propertyId: t.property_id,
+    propertyTitle: t.property_title,
+    jobId: t.job_id,
+    contractId: t.contract_id,
+    description: t.description,
+    inspectionCreditApplied: t.inspection_credit_applied,
+    rentPeriod: t.rent_period,
+    isPartial: t.is_partial,
+    receiptUrl: t.receipt_url,
+    createdAt: t.created_at,
+    processedAt: t.processed_at,
+    failureReason: t.failure_reason,
+  };
+}
+
+function formatMaintenance(m) {
+  if (!m) return null;
+  return {
+    id: m.id,
+    propertyId: m.property_id,
+    propertyTitle: m.property_title,
+    tenantId: m.tenant_id,
+    tenantName: m.tenant_name,
+    title: m.title,
+    description: m.description,
+    priority: m.priority,
+    status: m.status,
+    photos: m.photos || [],
+    vendorId: m.vendor_id,
+    vendorName: m.vendor_name,
+    estimatedCost: m.estimated_cost,
+    actualCost: m.actual_cost,
+    createdAt: m.created_at,
+    updatedAt: m.updated_at,
+    completedAt: m.completed_at,
+  };
+}
+
+function formatPayout(p) {
+  if (!p) return null;
+  return {
+    id: p.id,
+    landlordId: p.landlord_id,
+    landlordName: p.landlord_name,
+    propertyId: p.property_id,
+    propertyTitle: p.property_title,
+    grossRent: p.gross_rent,
+    managementFee: p.management_fee,
+    itabFee: p.itab_fee,
+    netAmount: p.net_amount,
+    status: p.status,
+    method: p.method,
+    reference: p.reference,
+    scheduledDate: p.scheduled_date,
+    processedAt: p.processed_at,
+    retryCount: p.retry_count,
+  };
+}
+
+function formatMessage(m) {
+  if (!m) return null;
+  return {
+    id: m.id,
+    conversationId: m.conversation_id,
+    senderId: m.sender_id,
+    senderName: m.sender_name,
+    senderAvatar: m.sender_avatar,
+    content: m.content,
+    isRead: m.is_read,
+    createdAt: m.created_at,
+  };
+}
+
+function formatConversation(c) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    participants: c.participants || [],
+    propertyId: c.property_id,
+    propertyTitle: c.property_title,
+    lastMessage: c.last_message,
+    unreadCount: c.unread_count || 0,
+    updatedAt: c.updated_at,
+  };
+}
+
+function formatNotification(n) {
+  if (!n) return null;
+  return {
+    id: n.id,
+    userId: n.user_id,
+    type: n.type,
+    title: n.title,
+    body: n.body,
+    isRead: n.is_read,
+    actionUrl: n.action_url,
+    createdAt: n.created_at,
+  };
+}
+
+function formatVendor(v) {
+  if (!v) return null;
+  return {
+    id: v.id,
+    userId: v.user_id,
+    firstName: v.first_name,
+    lastName: v.last_name,
+    email: v.email,
+    phone: v.phone,
+    avatar: v.avatar,
+    category: v.category,
+    skills: v.skills || [],
+    bio: v.bio,
+    district: v.district,
+    address: v.address,
+    rating: parseFloat(v.rating) || 0,
+    totalRatings: v.total_ratings || 0,
+    totalJobs: v.total_jobs || 0,
+    completedJobs: v.completed_jobs || 0,
+    isActive: v.is_active,
+    isVerified: v.is_verified,
+    isSuspended: v.is_suspended,
+    dailyRate: v.daily_rate,
+    hourlyRate: v.hourly_rate,
+    availability: v.availability,
+    joinedAt: v.joined_at,
+    lastActiveAt: v.last_active_at,
+  };
+}
+
+function formatVendorJob(j) {
+  if (!j) return null;
+  return {
+    id: j.id,
+    vendorId: j.vendor_id,
+    vendorName: j.vendor_name,
+    maintenanceRequestId: j.maintenance_request_id,
+    propertyTitle: j.property_title,
+    propertyAddress: j.property_address,
+    title: j.title,
+    description: j.description,
+    status: j.status,
+    scheduledDate: j.scheduled_date,
+    completedDate: j.completed_date,
+    estimatedCost: j.estimated_cost,
+    actualCost: j.actual_cost,
+    managerNotes: j.manager_notes,
+    vendorNotes: j.vendor_notes,
+    rating: j.rating,
+    ratingComment: j.rating_comment,
+    photos: j.photos || [],
+    createdAt: j.created_at,
+    updatedAt: j.updated_at,
+  };
+}
+
+function formatDocument(d) {
+  if (!d) return null;
+  return {
+    id: d.id,
+    ownerId: d.owner_id,
+    ownerName: d.owner_name,
+    ownerRole: d.owner_role,
+    name: d.name,
+    category: d.category,
+    status: d.status,
+    fileUrl: d.file_url,
+    fileType: d.file_type,
+    fileSize: d.file_size,
+    uploadedAt: d.uploaded_at,
+    expiresAt: d.expires_at,
+    reviewedBy: d.reviewed_by,
+    reviewedAt: d.reviewed_at,
+    adminNotes: d.admin_notes,
+  };
+}
+
+function formatNotice(n) {
+  if (!n) return null;
+  return {
+    id: n.id,
+    propertyId: n.property_id,
+    propertyTitle: n.property_title,
+    tenantId: n.tenant_id,
+    tenantName: n.tenant_name,
+    issuedBy: n.issued_by,
+    issuedByRole: n.issued_by_role,
+    type: n.type,
+    subject: n.subject,
+    body: n.body,
+    effectiveDate: n.effective_date,
+    responseDeadline: n.response_deadline,
+    status: n.status,
+    requiresAcknowledgement: n.requires_acknowledgement,
+    attachmentUrl: n.attachment_url,
+    tenantResponse: n.tenant_response,
+    createdAt: n.created_at,
+    readAt: n.read_at,
+    acknowledgedAt: n.acknowledged_at,
+  };
+}
+
+function formatDispute(d) {
+  if (!d) return null;
+  return {
+    id: d.id,
+    type: d.type,
+    status: d.status,
+    raisedById: d.raised_by_id,
+    raisedByName: d.raised_by_name,
+    raisedByRole: d.raised_by_role,
+    againstId: d.against_id,
+    againstName: d.against_name,
+    againstRole: d.against_role,
+    propertyId: d.property_id,
+    propertyTitle: d.property_title,
+    transactionId: d.transaction_id,
+    subject: d.subject,
+    description: d.description,
+    evidence: d.evidence,
+    amount: d.amount,
+    resolution: d.resolution,
+    resolvedById: d.resolved_by_id,
+    resolvedByName: d.resolved_by_name,
+    createdAt: d.created_at,
+    updatedAt: d.updated_at,
+    resolvedAt: d.resolved_at,
+  };
+}
+
+function formatAuditLog(a) {
+  if (!a) return null;
+  return {
+    id: a.id,
+    action: a.action,
+    performedBy: a.performed_by,
+    performedByName: a.performed_by_name,
+    performedByRole: a.performed_by_role,
+    targetId: a.target_id,
+    targetName: a.target_name,
+    description: a.description,
+    metadata: a.metadata,
+    createdAt: a.created_at,
+  };
+}
+
+function formatAnnouncement(a) {
+  if (!a) return null;
+  return {
+    id: a.id,
+    title: a.title,
+    body: a.body,
+    targetRoles: a.target_roles || [],
+    sentBy: a.sent_by,
+    sentByName: a.sent_by_name,
+    createdAt: a.created_at,
+  };
+}
+
+function formatContract(c) {
+  if (!c) return null;
+  return {
+    id: c.id,
+    vendorId: c.vendor_id,
+    vendorName: c.vendor_name,
+    propertyId: c.property_id,
+    propertyTitle: c.property_title,
+    managerId: c.manager_id,
+    type: c.type,
+    description: c.description,
+    amount: c.amount,
+    currency: c.currency,
+    startDate: c.start_date,
+    endDate: c.end_date,
+    status: c.status,
+    paymentMethod: c.payment_method,
+    nextPaymentDate: c.next_payment_date,
+    totalPaid: c.total_paid,
+    paymentsCount: c.payments_count,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at,
+  };
+}
+
+function formatAgentApplication(a) {
+  if (!a) return null;
+  return {
+    id: a.id,
+    userId: a.user_id,
+    firstName: a.first_name,
+    lastName: a.last_name,
+    email: a.email,
+    phone: a.phone,
+    role: a.role,
+    nationalIdNumber: a.national_id_number,
+    experience: a.experience,
+    districts: a.districts || [],
+    motivation: a.motivation,
+    status: a.status,
+    adminNote: a.admin_note,
+    createdAt: a.created_at,
+    reviewedAt: a.reviewed_at,
+  };
+}
+
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// ─── Auth Routes ──────────────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUTH ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { firstName, lastName, email, phone, password, role } = req.body;
@@ -60,15 +513,18 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const id = uuidv4();
+    const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor'];
+    const assignedRole = allowedRoles.includes(role) ? role : 'tenant';
     const result = await pool.query(
-      'INSERT INTO users (id, first_name, last_name, email, phone, password_hash, role, kyc_status, is_verified) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
-      [id, firstName, lastName, email, phone, hash, role || 'tenant', 'pending', false]
+      `INSERT INTO users (id, first_name, last_name, email, phone, password_hash, role, kyc_status, is_verified, is_suspended, approval_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',false,false,'pending') RETURNING *`,
+      [id, firstName, lastName, email, phone || null, hash, assignedRole]
     );
     const user = formatUser(result.rows[0]);
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     res.status(201).json({ data: { user, token } });
   } catch (err) {
-    console.error(err);
+    console.error('register error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -81,7 +537,6 @@ app.post('/api/auth/login', async (req, res) => {
     const user = result.rows[0];
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
-    // Check suspension
     if (user.is_suspended) {
       return res.status(403).json({
         message: 'Account suspended',
@@ -90,9 +545,15 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    // Log login
+    await pool.query(
+      `INSERT INTO audit_logs (id, action, performed_by, performed_by_name, performed_by_role, description)
+       VALUES ($1,'login',$2,$3,$4,'User logged in')`,
+      [uuidv4(), user.id, `${user.first_name} ${user.last_name}`, user.role]
+    ).catch(() => {});
     res.json({ data: { user: formatUser(user), token } });
   } catch (err) {
-    console.error(err);
+    console.error('login error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -107,217 +568,86 @@ app.get('/api/auth/me', auth, async (req, res) => {
   }
 });
 
-// ─── Properties Routes ────────────────────────────────────────────────────────
-app.get('/api/properties', async (req, res) => {
+app.put('/api/auth/profile', auth, async (req, res) => {
   try {
-    const { search, type, status, district, minPrice, maxPrice, bedrooms } = req.query;
-    let query = 'SELECT * FROM properties WHERE 1=1';
-    const params = [];
-    let i = 1;
-
-    if (search) { query += ` AND (title ILIKE $${i} OR address ILIKE $${i} OR district ILIKE $${i})`; params.push(`%${search}%`); i++; }
-    if (type) { query += ` AND type = $${i}`; params.push(type); i++; }
-    if (status) { query += ` AND status = $${i}`; params.push(status); i++; }
-    if (district) { query += ` AND district = $${i}`; params.push(district); i++; }
-    if (minPrice) { query += ` AND rent_price >= $${i}`; params.push(Number(minPrice)); i++; }
-    if (maxPrice) { query += ` AND rent_price <= $${i}`; params.push(Number(maxPrice)); i++; }
-    if (bedrooms) { query += ` AND bedrooms >= $${i}`; params.push(Number(bedrooms)); i++; }
-
-    query += ' ORDER BY created_at DESC';
-    const result = await pool.query(query, params);
-    res.json({ data: result.rows.map(formatProperty) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.get('/api/properties/:id', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM properties WHERE id = $1', [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
-    // Increment view count
-    await pool.query('UPDATE properties SET view_count = view_count + 1 WHERE id = $1', [req.params.id]);
-    res.json({ data: formatProperty(result.rows[0]) });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agent', 'landlord'), async (req, res) => {
-  try {
-    const { title, description, type, address, district, latitude, longitude, bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom, amenities, managementFeePercent, itabFeePercent } = req.body;
-    const id = uuidv4();
+    const { firstName, lastName, phone, avatar } = req.body;
     const result = await pool.query(
-      `INSERT INTO properties (id, title, description, type, status, address, district, latitude, longitude, bedrooms, bathrooms, square_footage, rent_price, deposit, available_from, amenities, management_fee_percent, itab_fee_percent, manager_id, view_count)
-       VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,0) RETURNING *`,
-      [id, title, description, type, address, district, latitude || 0.3476, longitude || 32.5825, bedrooms || 0, bathrooms || 0, squareFootage, rentPrice, deposit, availableFrom, JSON.stringify(amenities || []), managementFeePercent || 10, itabFeePercent || 2, req.user.id]
+      `UPDATE users SET first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name),
+       phone=COALESCE($3,phone), avatar=COALESCE($4,avatar), updated_at=NOW()
+       WHERE id=$5 RETURNING *`,
+      [firstName, lastName, phone, avatar, req.user.id]
     );
-    res.status(201).json({ data: formatProperty(result.rows[0]) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.put('/api/properties/:id', auth, async (req, res) => {
-  try {
-    const { title, description, rentPrice, status, amenities } = req.body;
-    const result = await pool.query(
-      'UPDATE properties SET title=$1, description=$2, rent_price=$3, status=$4, amenities=$5, updated_at=NOW() WHERE id=$6 RETURNING *',
-      [title, description, rentPrice, status, JSON.stringify(amenities), req.params.id]
-    );
-    res.json({ data: formatProperty(result.rows[0]) });
+    res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ─── Inspections Routes ───────────────────────────────────────────────────────
-app.get('/api/inspections', auth, async (req, res) => {
-  try {
-    let query = 'SELECT * FROM inspections WHERE 1=1';
-    const params = [];
-    if (req.user.role === 'tenant') { query += ' AND tenant_id = $1'; params.push(req.user.id); }
-    else if (req.user.role === 'property_manager') { query += ' AND manager_id = $1'; params.push(req.user.id); }
-    query += ' ORDER BY created_at DESC';
-    const result = await pool.query(query, params);
-    res.json({ data: result.rows.map(formatInspection) });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
+app.post('/api/auth/forgot-password', async (req, res) => {
+  // In production: send reset email. For now just acknowledge.
+  res.json({ data: { message: 'If that email exists, a reset link has been sent.' } });
 });
 
-app.post('/api/inspections', auth, requireRole('tenant'), async (req, res) => {
-  try {
-    const { propertyId, scheduledDate, scheduledTime } = req.body;
-    const prop = await pool.query('SELECT * FROM properties WHERE id = $1', [propertyId]);
-    if (prop.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
-    const id = uuidv4();
-    const result = await pool.query(
-      `INSERT INTO inspections (id, property_id, property_title, property_address, tenant_id, manager_id, scheduled_date, scheduled_time, status, fee_amount, fee_paid, credit_applied, no_show_count, reschedule_count)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',100000,false,false,0,0) RETURNING *`,
-      [id, propertyId, prop.rows[0].title, prop.rows[0].address, req.user.id, prop.rows[0].manager_id, scheduledDate, scheduledTime]
-    );
-    res.status(201).json({ data: formatInspection(result.rows[0]) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
+app.post('/api/auth/reset-password', async (req, res) => {
+  res.json({ data: { message: 'Password reset functionality coming soon.' } });
 });
 
-// ─── Payments Routes ──────────────────────────────────────────────────────────
-app.get('/api/payments', auth, async (req, res) => {
-  try {
-    let query = 'SELECT * FROM payments WHERE 1=1';
-    const params = [];
-    if (req.user.role === 'tenant') { query += ' AND tenant_id = $1'; params.push(req.user.id); }
-    query += ' ORDER BY created_at DESC';
-    const result = await pool.query(query, params);
-    res.json({ data: result.rows.map(formatPayment) });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// MTN MoMo initiate (sandbox)
-app.post('/api/payments/mtn/initiate', auth, async (req, res) => {
-  try {
-    const { amount, phone, type, propertyId } = req.body;
-    // In production: call MTN MoMo Collections API
-    // POST https://sandbox.momodeveloper.mtn.com/collection/v1_0/requesttopay
-    const reference = `MTN-${Date.now()}`;
-    res.json({ data: { reference, status: 'pending', message: 'USSD prompt sent to ' + phone } });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Airtel Money initiate (sandbox)
-app.post('/api/payments/airtel/initiate', auth, async (req, res) => {
-  try {
-    const { amount, phone, type, propertyId } = req.body;
-    // In production: call Airtel Money API
-    // POST https://openapi.airtel.africa/merchant/v1/payments/
-    const reference = `AIR-${Date.now()}`;
-    res.json({ data: { reference, status: 'pending', message: 'Payment request sent to ' + phone } });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ─── Analytics ────────────────────────────────────────────────────────────────
-app.get('/api/analytics/dashboard', auth, async (req, res) => {
-  try {
-    const [props, tenants, maintenance, payments] = await Promise.all([
-      pool.query('SELECT COUNT(*) as total, COUNT(CASE WHEN status=\'published\' THEN 1 END) as vacant, COUNT(CASE WHEN status=\'rented\' THEN 1 END) as occupied FROM properties'),
-      pool.query('SELECT COUNT(*) FROM users WHERE role=\'tenant\''),
-      pool.query('SELECT COUNT(*) FROM maintenance_requests WHERE status NOT IN (\'completed\',\'cancelled\')'),
-      pool.query('SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE status=\'completed\' AND created_at >= date_trunc(\'month\', NOW())'),
-    ]);
-    res.json({
-      data: {
-        totalProperties: parseInt(props.rows[0].total),
-        vacantProperties: parseInt(props.rows[0].vacant),
-        occupiedProperties: parseInt(props.rows[0].occupied),
-        totalTenants: parseInt(tenants.rows[0].count),
-        pendingMaintenance: parseInt(maintenance.rows[0].count),
-        monthlyRevenue: parseInt(payments.rows[0].total),
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// ─── Google OAuth ─────────────────────────────────────────────────────────────
+// Google OAuth
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { googleId, email, firstName, lastName, avatar, role } = req.body;
     if (!email) return res.status(400).json({ message: 'Email is required' });
 
-    // Check if user already exists by email
-    const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0) {
-      const user = existing.rows[0];
+    let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    let user;
+    let requiresApproval = false;
+
+    if (result.rows.length > 0) {
+      user = result.rows[0];
       // Update google_id if not set
-      if (!user.google_id && googleId) {
+      if (!user.google_id) {
         await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, user.id]);
         user.google_id = googleId;
       }
-      if (user.is_suspended) {
-        return res.status(403).json({ message: 'Account suspended', reason: user.suspended_reason, code: 'ACCOUNT_SUSPENDED' });
-      }
-      const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
-      return res.json({ data: { user: formatUser(user), token, requiresApproval: false } });
+    } else {
+      const id = uuidv4();
+      const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor'];
+      const assignedRole = allowedRoles.includes(role) ? role : 'tenant';
+      requiresApproval = ['agent', 'landlord'].includes(assignedRole);
+      const insertResult = await pool.query(
+        `INSERT INTO users (id, first_name, last_name, email, google_id, avatar, role, kyc_status, is_verified, is_suspended, approval_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',true,false,$8) RETURNING *`,
+        [id, firstName, lastName, email, googleId, avatar, assignedRole, requiresApproval ? 'pending' : 'approved']
+      );
+      user = insertResult.rows[0];
     }
 
-    // New user
-    const selectedRole = role || 'tenant';
-    const requiresApproval = ['agent', 'property_manager'].includes(selectedRole);
-    const approvalStatus = requiresApproval ? 'pending' : 'approved';
-    const kycStatus = requiresApproval ? 'pending' : 'pending';
-    const isVerified = !requiresApproval;
+    if (user.is_suspended) {
+      return res.status(403).json({ message: 'Account suspended', code: 'ACCOUNT_SUSPENDED' });
+    }
 
-    const id = uuidv4();
-    const result = await pool.query(
-      `INSERT INTO users (id, first_name, last_name, email, role, avatar, google_id, kyc_status, is_verified, approval_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [id, firstName || email.split('@')[0], lastName || '', email, selectedRole, avatar || null, googleId || null, kycStatus, isVerified, approvalStatus]
-    );
-    const newUser = formatUser(result.rows[0]);
-    const token = jwt.sign({ id: newUser.id, role: newUser.role }, JWT_SECRET, { expiresIn: '30d' });
-    res.status(201).json({ data: { user: newUser, token, requiresApproval } });
+    const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ data: { user: formatUser(user), token, requiresApproval } });
   } catch (err) {
-    console.error(err);
+    console.error('google auth error:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ─── Users (Admin) ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// USERS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
 app.get('/api/users', auth, requireRole('admin'), async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
+    const { role, search } = req.query;
+    let query = 'SELECT * FROM users WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (role) { query += ` AND role = $${i}`; params.push(role); i++; }
+    if (search) { query += ` AND (first_name ILIKE $${i} OR last_name ILIKE $${i} OR email ILIKE $${i})`; params.push(`%${search}%`); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
     res.json({ data: result.rows.map(formatUser) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -333,64 +663,25 @@ app.get('/api/users/pending', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-app.patch('/api/users/:id/permissions', auth, requireRole('admin'), async (req, res) => {
+app.get('/api/users/:id', auth, async (req, res) => {
   try {
-    const { permissions } = req.body;
-    await pool.query('UPDATE users SET permissions=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(permissions || {}), req.params.id]);
-    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-app.patch('/api/users/:id/districts', auth, requireRole('admin'), async (req, res) => {
+app.put('/api/users/:id', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { districts } = req.body;
-    await pool.query('UPDATE users SET restricted_districts=$1, updated_at=NOW() WHERE id=$2', [districts || [], req.params.id]);
-    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
-    res.json({ data: formatUser(result.rows[0]) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.patch('/api/users/:id/role', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { role } = req.body;
-    if (!role) return res.status(400).json({ message: 'Role is required' });
-    await pool.query('UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2', [role, req.params.id]);
-    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
-    res.json({ data: formatUser(result.rows[0]) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.patch('/api/users/:id/approve', auth, requireRole('admin'), async (req, res) => {
-  try {
-    await pool.query(
-      "UPDATE users SET kyc_status='approved', is_verified=true, approval_status='approved', updated_at=NOW() WHERE id=$1",
-      [req.params.id]
+    const { firstName, lastName, phone, role, notes } = req.body;
+    const result = await pool.query(
+      `UPDATE users SET first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name),
+       phone=COALESCE($3,phone), role=COALESCE($4,role), notes=COALESCE($5,notes), updated_at=NOW()
+       WHERE id=$6 RETURNING *`,
+      [firstName, lastName, phone, role, notes, req.params.id]
     );
-    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
-    res.json({ data: formatUser(result.rows[0]) });
-  } catch (err) {
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), async (req, res) => {
-  try {
-    const { reason } = req.body;
-    await pool.query(
-      "UPDATE users SET approval_status='rejected', notes=$1, updated_at=NOW() WHERE id=$2",
-      [reason || null, req.params.id]
-    );
-    const result = await pool.query('SELECT * FROM users WHERE id=$1', [req.params.id]);
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -400,11 +691,16 @@ app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), async (r
 app.patch('/api/users/:id/suspend', auth, requireRole('admin'), async (req, res) => {
   try {
     const { reason } = req.body;
-    await pool.query(
-      'UPDATE users SET is_suspended=true, suspended_reason=$1, suspended_at=NOW(), is_active=false WHERE id=$2',
-      [reason || null, req.params.id]
+    const result = await pool.query(
+      `UPDATE users SET is_suspended=true, suspended_reason=$1, suspended_at=NOW(), updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [reason || 'Suspended by admin', req.params.id]
     );
-    res.json({ data: { message: 'User suspended' } });
+    await pool.query(
+      `INSERT INTO audit_logs (id,action,performed_by,performed_by_name,performed_by_role,target_id,description)
+       VALUES ($1,'user_suspended',$2,$3,$4,$5,$6)`,
+      [uuidv4(), req.user.id, req.user.name || 'Admin', req.user.role, req.params.id, `Suspended. Reason: ${reason}`]
+    ).catch(() => {});
+    res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -412,125 +708,1390 @@ app.patch('/api/users/:id/suspend', auth, requireRole('admin'), async (req, res)
 
 app.patch('/api/users/:id/unsuspend', auth, requireRole('admin'), async (req, res) => {
   try {
-    await pool.query(
-      'UPDATE users SET is_suspended=false, suspended_reason=NULL, suspended_at=NULL, is_active=true WHERE id=$1',
+    const result = await pool.query(
+      `UPDATE users SET is_suspended=false, suspended_reason=NULL, suspended_at=NULL, updated_at=NOW() WHERE id=$1 RETURNING *`,
       [req.params.id]
     );
-    res.json({ data: { message: 'User unsuspended' } });
+    res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
-function formatUser(u) {
-  return {
-    id: u.id, email: u.email, phone: u.phone,
-    firstName: u.first_name, lastName: u.last_name,
-    role: u.role, avatar: u.avatar,
-    isVerified: u.is_verified,
-    isSuspended: u.is_suspended || false,
-    suspendedReason: u.suspended_reason || undefined,
-    kycStatus: u.kyc_status,
-    permissions: u.permissions || {},
-    restrictedDistricts: u.restricted_districts || [],
-    approvalStatus: u.approval_status || 'approved',
-    kycDocuments: u.kyc_documents || [],
-    googleId: u.google_id || undefined,
-    notes: u.notes || undefined,
-    createdAt: u.created_at, updatedAt: u.updated_at,
-  };
-}
-
-function formatProperty(p) {
-  return { id: p.id, title: p.title, description: p.description, type: p.type, status: p.status, address: p.address, district: p.district, latitude: parseFloat(p.latitude) || 0.3476, longitude: parseFloat(p.longitude) || 32.5825, bedrooms: p.bedrooms, bathrooms: p.bathrooms, squareFootage: p.square_footage, rentPrice: parseInt(p.rent_price), deposit: parseInt(p.deposit), availableFrom: p.available_from, photos: p.photos || [], amenities: p.amenities || [], managementFeePercent: p.management_fee_percent, itabFeePercent: p.itab_fee_percent, isFeatured: p.is_featured, managerId: p.manager_id, landlordId: p.landlord_id, viewCount: p.view_count, createdAt: p.created_at, updatedAt: p.updated_at };
-}
-
-function formatInspection(i) {
-  return { id: i.id, propertyId: i.property_id, propertyTitle: i.property_title, propertyAddress: i.property_address, tenantId: i.tenant_id, managerId: i.manager_id, scheduledDate: i.scheduled_date, scheduledTime: i.scheduled_time, status: i.status, feeAmount: parseInt(i.fee_amount), feePaid: i.fee_paid, paymentMethod: i.payment_method, paymentRef: i.payment_ref, creditApplied: i.credit_applied, noShowCount: i.no_show_count, rescheduleCount: i.reschedule_count, createdAt: i.created_at };
-}
-
-function formatPayment(p) {
-  return { id: p.id, type: p.type, amount: parseInt(p.amount), currency: p.currency || 'UGX', status: p.status, method: p.method, reference: p.reference, propertyId: p.property_id, propertyTitle: p.property_title, tenantId: p.tenant_id, inspectionCreditApplied: p.inspection_credit_applied, createdAt: p.created_at, paidAt: p.paid_at };
-}
-
-// ─── DB Init ──────────────────────────────────────────────────────────────────
-async function initDB() {
+app.patch('/api/users/:id/approve', auth, requireRole('admin'), async (req, res) => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY, first_name VARCHAR(100), last_name VARCHAR(100),
-        email VARCHAR(255) UNIQUE NOT NULL, phone VARCHAR(20), password_hash VARCHAR(255),
-        role VARCHAR(50) DEFAULT 'tenant', avatar TEXT, is_verified BOOLEAN DEFAULT false,
-        is_active BOOLEAN DEFAULT true, is_suspended BOOLEAN DEFAULT false,
-        suspended_reason TEXT, suspended_at TIMESTAMPTZ,
-        kyc_status VARCHAR(50) DEFAULT 'pending',
-        permissions JSONB DEFAULT '{}',
-        restricted_districts TEXT[] DEFAULT '{}',
-        approval_status VARCHAR(50) DEFAULT 'approved',
-        kyc_documents JSONB DEFAULT '[]',
-        google_id VARCHAR(255),
-        notes TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      CREATE TABLE IF NOT EXISTS properties (
-        id UUID PRIMARY KEY, title VARCHAR(255), description TEXT, type VARCHAR(50),
-        status VARCHAR(50) DEFAULT 'draft', address TEXT, district VARCHAR(100),
-        latitude DECIMAL(10,7), longitude DECIMAL(10,7), bedrooms INT DEFAULT 0,
-        bathrooms INT DEFAULT 0, square_footage INT, rent_price BIGINT, deposit BIGINT,
-        available_from DATE, photos JSONB DEFAULT '[]', amenities JSONB DEFAULT '[]',
-        management_fee_percent DECIMAL(5,2) DEFAULT 10, itab_fee_percent DECIMAL(5,2) DEFAULT 2,
-        is_featured BOOLEAN DEFAULT false, manager_id UUID, landlord_id UUID, tenant_id UUID,
-        view_count INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      CREATE TABLE IF NOT EXISTS inspections (
-        id UUID PRIMARY KEY, property_id UUID, property_title VARCHAR(255), property_address TEXT,
-        tenant_id UUID, manager_id UUID, scheduled_date DATE, scheduled_time VARCHAR(10),
-        status VARCHAR(50) DEFAULT 'pending', fee_amount BIGINT DEFAULT 100000,
-        fee_paid BOOLEAN DEFAULT false, payment_method VARCHAR(50), payment_ref VARCHAR(100),
-        credit_applied BOOLEAN DEFAULT false, no_show_count INT DEFAULT 0,
-        reschedule_count INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-      CREATE TABLE IF NOT EXISTS payments (
-        id UUID PRIMARY KEY, type VARCHAR(50), amount BIGINT, currency VARCHAR(10) DEFAULT 'UGX',
-        status VARCHAR(50) DEFAULT 'pending', method VARCHAR(50), reference VARCHAR(100),
-        property_id UUID, property_title VARCHAR(255), tenant_id UUID, landlord_id UUID,
-        inspection_credit_applied BIGINT DEFAULT 0, receipt_url TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW(), paid_at TIMESTAMPTZ
-      );
-      CREATE TABLE IF NOT EXISTS maintenance_requests (
-        id UUID PRIMARY KEY, property_id UUID, property_title VARCHAR(255),
-        tenant_id UUID, tenant_name VARCHAR(200), title VARCHAR(255), description TEXT,
-        priority VARCHAR(50) DEFAULT 'normal', status VARCHAR(50) DEFAULT 'submitted',
-        photos JSONB DEFAULT '[]', vendor_id UUID, estimated_cost BIGINT, actual_cost BIGINT,
-        created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(), completed_at TIMESTAMPTZ
-      );
-      CREATE TABLE IF NOT EXISTS payouts (
-        id UUID PRIMARY KEY, landlord_id UUID, property_id UUID, gross_rent BIGINT,
-        management_fee BIGINT, itab_fee BIGINT, net_amount BIGINT,
-        status VARCHAR(50) DEFAULT 'pending', method VARCHAR(50), reference VARCHAR(100),
-        scheduled_date DATE, processed_at TIMESTAMPTZ, retry_count INT DEFAULT 0,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-    // Add new columns to existing tables if they don't exist
-    await pool.query(`
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '{}';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS restricted_districts TEXT[] DEFAULT '{}';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS approval_status VARCHAR(50) DEFAULT 'approved';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_documents JSONB DEFAULT '[]';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255);
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS notes TEXT;
-    `);
-    console.log('✅ Database tables initialized');
+    const result = await pool.query(
+      `UPDATE users SET approval_status='approved', kyc_status='approved', is_verified=true, updated_at=NOW() WHERE id=$1 RETURNING *`,
+      [req.params.id]
+    );
+    res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
-    console.error('❌ DB init error:', err.message);
+    res.status(500).json({ message: 'Server error' });
   }
-}
-
-// ─── Start ────────────────────────────────────────────────────────────────────
-app.listen(PORT, async () => {
-  console.log(`🚀 ITAB Backend running on port ${PORT}`);
-  if (process.env.DATABASE_URL) await initDB();
-  else console.log('⚠️  No DATABASE_URL set – running without database (mock mode)');
 });
+
+app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const result = await pool.query(
+      `UPDATE users SET approval_status='rejected', notes=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [reason, req.params.id]
+    );
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/permissions', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { permissions } = req.body;
+    const result = await pool.query(
+      `UPDATE users SET permissions=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [JSON.stringify(permissions), req.params.id]
+    );
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/districts', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { districts } = req.body;
+    const result = await pool.query(
+      `UPDATE users SET restricted_districts=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [JSON.stringify(districts), req.params.id]
+    );
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/users/:id/role', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { role } = req.body;
+    const result = await pool.query(
+      `UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [role, req.params.id]
+    );
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROPERTIES ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/properties', async (req, res) => {
+  try {
+    const { search, type, status, district, minPrice, maxPrice, bedrooms } = req.query;
+    let query = 'SELECT * FROM properties WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (search) { query += ` AND (title ILIKE $${i} OR address ILIKE $${i} OR district ILIKE $${i})`; params.push(`%${search}%`); i++; }
+    if (type) { query += ` AND type = $${i}`; params.push(type); i++; }
+    if (status) { query += ` AND status = $${i}`; params.push(status); i++; }
+    if (district) { query += ` AND district = $${i}`; params.push(district); i++; }
+    if (minPrice) { query += ` AND rent_price >= $${i}`; params.push(Number(minPrice)); i++; }
+    if (maxPrice) { query += ` AND rent_price <= $${i}`; params.push(Number(maxPrice)); i++; }
+    if (bedrooms) { query += ` AND bedrooms >= $${i}`; params.push(Number(bedrooms)); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatProperty) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/properties/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM properties WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    await pool.query('UPDATE properties SET view_count = view_count + 1 WHERE id = $1', [req.params.id]).catch(() => {});
+    res.json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agent', 'landlord'), async (req, res) => {
+  try {
+    const {
+      title, description, type, address, district, latitude, longitude,
+      bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
+      amenities, managementFeePercent, itabFeePercent, photos, tourUrl,
+      landlordId, landlordName,
+    } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO properties (id, title, description, type, status, address, district, latitude, longitude,
+       bedrooms, bathrooms, square_footage, rent_price, deposit, available_from, amenities, photos,
+       management_fee_percent, itab_fee_percent, manager_id, manager_name, landlord_id, landlord_name,
+       tour_url, is_featured, view_count)
+       VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,false,0) RETURNING *`,
+      [
+        id, title, description, type, address, district,
+        latitude || 0.3476, longitude || 32.5825,
+        bedrooms || 0, bathrooms || 0, squareFootage || null,
+        rentPrice, deposit, availableFrom,
+        JSON.stringify(amenities || []),
+        JSON.stringify(photos || []),
+        managementFeePercent || 10, itabFeePercent || 2,
+        req.user.id, null,
+        landlordId || null, landlordName || null,
+        tourUrl || null,
+      ]
+    );
+    res.status(201).json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/properties/:id', auth, async (req, res) => {
+  try {
+    const {
+      title, description, type, address, district, latitude, longitude,
+      bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
+      amenities, photos, status, managementFeePercent, itabFeePercent,
+      isFeatured, tourUrl, landlordId, landlordName, tenantId, leaseStart, leaseEnd,
+    } = req.body;
+    const result = await pool.query(
+      `UPDATE properties SET
+        title=COALESCE($1,title), description=COALESCE($2,description), type=COALESCE($3,type),
+        address=COALESCE($4,address), district=COALESCE($5,district),
+        latitude=COALESCE($6,latitude), longitude=COALESCE($7,longitude),
+        bedrooms=COALESCE($8,bedrooms), bathrooms=COALESCE($9,bathrooms),
+        square_footage=COALESCE($10,square_footage), rent_price=COALESCE($11,rent_price),
+        deposit=COALESCE($12,deposit), available_from=COALESCE($13,available_from),
+        amenities=COALESCE($14,amenities), photos=COALESCE($15,photos),
+        status=COALESCE($16,status), management_fee_percent=COALESCE($17,management_fee_percent),
+        itab_fee_percent=COALESCE($18,itab_fee_percent), is_featured=COALESCE($19,is_featured),
+        tour_url=COALESCE($20,tour_url), landlord_id=COALESCE($21,landlord_id),
+        landlord_name=COALESCE($22,landlord_name), tenant_id=COALESCE($23,tenant_id),
+        lease_start=COALESCE($24,lease_start), lease_end=COALESCE($25,lease_end),
+        updated_at=NOW()
+       WHERE id=$26 RETURNING *`,
+      [
+        title, description, type, address, district, latitude, longitude,
+        bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
+        amenities ? JSON.stringify(amenities) : null,
+        photos ? JSON.stringify(photos) : null,
+        status, managementFeePercent, itabFeePercent, isFeatured, tourUrl,
+        landlordId, landlordName, tenantId, leaseStart, leaseEnd,
+        req.params.id,
+      ]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    res.json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.delete('/api/properties/:id', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    await pool.query('DELETE FROM properties WHERE id = $1', [req.params.id]);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/properties/:id/feature', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      'UPDATE properties SET is_featured = NOT is_featured, updated_at=NOW() WHERE id=$1 RETURNING *',
+      [req.params.id]
+    );
+    res.json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/properties/:id/photos', auth, async (req, res) => {
+  try {
+    const { photoUrls } = req.body; // array of URLs (base64 or CDN)
+    const prop = await pool.query('SELECT photos FROM properties WHERE id=$1', [req.params.id]);
+    if (prop.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    const existing = prop.rows[0].photos || [];
+    const merged = [...existing, ...(photoUrls || [])];
+    const result = await pool.query(
+      'UPDATE properties SET photos=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+      [JSON.stringify(merged), req.params.id]
+    );
+    res.json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INSPECTIONS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/inspections', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM inspections WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'tenant') { query += ` AND tenant_id = $${i}`; params.push(req.user.id); i++; }
+    else if (req.user.role === 'property_manager' || req.user.role === 'agent') { query += ` AND manager_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatInspection) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/inspections/:id', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM inspections WHERE id=$1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
+    res.json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/inspections', auth, requireRole('tenant'), async (req, res) => {
+  try {
+    const { propertyId, scheduledDate, scheduledTime } = req.body;
+    const prop = await pool.query('SELECT * FROM properties WHERE id = $1', [propertyId]);
+    if (prop.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    const tenantResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const tenant = tenantResult.rows[0];
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO inspections (id, property_id, property_title, property_address, tenant_id, tenant_name,
+       manager_id, scheduled_date, scheduled_time, status, fee_amount, fee_paid, credit_applied, no_show_count, reschedule_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',100000,false,false,0,0) RETURNING *`,
+      [id, propertyId, prop.rows[0].title, prop.rows[0].address, req.user.id,
+       `${tenant.first_name} ${tenant.last_name}`, prop.rows[0].manager_id, scheduledDate, scheduledTime]
+    );
+    res.status(201).json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/inspections/:id/confirm', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE inspections SET status='confirmed', updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/inspections/:id/cancel', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE inspections SET status='cancelled', updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/inspections/:id/reschedule', auth, async (req, res) => {
+  try {
+    const { scheduledDate, scheduledTime } = req.body;
+    const result = await pool.query(
+      `UPDATE inspections SET scheduled_date=$1, scheduled_time=$2,
+       reschedule_count=reschedule_count+1, status='pending', updated_at=NOW() WHERE id=$3 RETURNING *`,
+      [scheduledDate, scheduledTime, req.params.id]
+    );
+    res.json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/inspections/:id/no-show', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE inspections SET status='no_show', no_show_count=no_show_count+1, updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/inspections/:id/pay', auth, async (req, res) => {
+  try {
+    const { method, reference } = req.body;
+    const result = await pool.query(
+      `UPDATE inspections SET fee_paid=true, payment_method=$1, payment_ref=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
+      [method, reference, req.params.id]
+    );
+    res.json({ data: formatInspection(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PAYMENTS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/payments', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM payments WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'tenant') { query += ` AND tenant_id = $${i}`; params.push(req.user.id); i++; }
+    else if (req.user.role === 'landlord') { query += ` AND landlord_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatPayment) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/payments/:id', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM payments WHERE id=$1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
+    res.json({ data: formatPayment(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/payments/rent', auth, requireRole('tenant'), async (req, res) => {
+  try {
+    const { propertyId, propertyTitle, amount, method, reference, rentPeriod, isPartial, inspectionCreditApplied, landlordId } = req.body;
+    const id = uuidv4();
+    const tenantResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const tenant = tenantResult.rows[0];
+    const result = await pool.query(
+      `INSERT INTO payments (id, type, amount, currency, status, method, reference, property_id, property_title,
+       tenant_id, tenant_name, landlord_id, inspection_credit_applied, rent_period, is_partial, paid_at)
+       VALUES ($1,$2,$3,'UGX','completed',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW()) RETURNING *`,
+      [id, isPartial ? 'rent_partial' : 'rent', amount, method, reference || `PAY-${Date.now()}`,
+       propertyId, propertyTitle, req.user.id, `${tenant.first_name} ${tenant.last_name}`,
+       landlordId || null, inspectionCreditApplied || 0, rentPeriod || null, isPartial || false]
+    );
+    res.status(201).json({ data: formatPayment(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/payments/mtn/initiate', auth, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const reference = `MTN-${Date.now()}`;
+    res.json({ data: { reference, status: 'pending', message: `USSD prompt sent to ${phone}` } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/payments/airtel/initiate', auth, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const reference = `AIR-${Date.now()}`;
+    res.json({ data: { reference, status: 'pending', message: `Payment request sent to ${phone}` } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/payments/status/:ref', auth, async (req, res) => {
+  res.json({ data: { reference: req.params.ref, status: 'completed' } });
+});
+
+app.get('/api/payments/:id/receipt', auth, async (req, res) => {
+  res.json({ data: { receiptUrl: null, message: 'Receipt generation coming soon' } });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRANSACTIONS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/transactions', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM transactions WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role !== 'admin' && req.user.role !== 'property_manager') {
+      query += ` AND (sender_id = $${i} OR receiver_id = $${i})`;
+      params.push(req.user.id); i++;
+    }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatTransaction) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/transactions', auth, async (req, res) => {
+  try {
+    const tx = req.body;
+    const id = tx.id || uuidv4();
+    const result = await pool.query(
+      `INSERT INTO transactions (id, type, sender_id, sender_name, sender_role, sender_method, sender_phone,
+       receiver_id, receiver_name, receiver_role, receiver_method, receiver_phone, receiver_bank_details,
+       amount, currency, reference, status, property_id, property_title, job_id, contract_id,
+       description, inspection_credit_applied, rent_period, is_partial, created_at, processed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
+       COALESCE($26,NOW()), COALESCE($27,NOW()))
+       ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, processed_at=EXCLUDED.processed_at
+       RETURNING *`,
+      [
+        id, tx.type, tx.senderId, tx.senderName, tx.senderRole, tx.senderMethod, tx.senderPhone || null,
+        tx.receiverId, tx.receiverName, tx.receiverRole, tx.receiverMethod, tx.receiverPhone || null,
+        tx.receiverBankDetails ? JSON.stringify(tx.receiverBankDetails) : null,
+        tx.amount, tx.currency || 'UGX', tx.reference, tx.status || 'completed',
+        tx.propertyId || null, tx.propertyTitle || null, tx.jobId || null, tx.contractId || null,
+        tx.description, tx.inspectionCreditApplied || 0, tx.rentPeriod || null, tx.isPartial || false,
+        tx.createdAt || null, tx.processedAt || null,
+      ]
+    );
+    res.status(201).json({ data: formatTransaction(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/transactions/:id/retry', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE transactions SET status='completed', processed_at=NOW(), failure_reason=NULL WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatTransaction(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/transactions/:id/refund', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE transactions SET status='refunded', updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatTransaction(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAINTENANCE ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/maintenance', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM maintenance_requests WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'tenant') { query += ` AND tenant_id = $${i}`; params.push(req.user.id); i++; }
+    else if (req.user.role === 'vendor') { query += ` AND vendor_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatMaintenance) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/maintenance/:id', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM maintenance_requests WHERE id=$1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
+    res.json({ data: formatMaintenance(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/maintenance', auth, requireRole('tenant', 'property_manager', 'landlord'), async (req, res) => {
+  try {
+    const { propertyId, propertyTitle, title, description, priority, photos } = req.body;
+    const tenantResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const tenant = tenantResult.rows[0];
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO maintenance_requests (id, property_id, property_title, tenant_id, tenant_name,
+       title, description, priority, status, photos)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'submitted',$9) RETURNING *`,
+      [id, propertyId, propertyTitle, req.user.id, `${tenant.first_name} ${tenant.last_name}`,
+       title, description, priority || 'normal', JSON.stringify(photos || [])]
+    );
+    res.status(201).json({ data: formatMaintenance(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/maintenance/:id', auth, async (req, res) => {
+  try {
+    const { status, vendorId, vendorName, estimatedCost, actualCost } = req.body;
+    const result = await pool.query(
+      `UPDATE maintenance_requests SET
+       status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), vendor_name=COALESCE($3,vendor_name),
+       estimated_cost=COALESCE($4,estimated_cost), actual_cost=COALESCE($5,actual_cost),
+       completed_at=CASE WHEN $1='completed' THEN NOW() ELSE completed_at END,
+       updated_at=NOW() WHERE id=$6 RETURNING *`,
+      [status, vendorId, vendorName, estimatedCost, actualCost, req.params.id]
+    );
+    res.json({ data: formatMaintenance(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/maintenance/:id/assign', auth, requireRole('admin', 'property_manager', 'landlord'), async (req, res) => {
+  try {
+    const { vendorId } = req.body;
+    const vendor = await pool.query('SELECT * FROM vendors WHERE id=$1', [vendorId]);
+    const vendorName = vendor.rows.length > 0 ? `${vendor.rows[0].first_name} ${vendor.rows[0].last_name}` : vendorId;
+    const result = await pool.query(
+      "UPDATE maintenance_requests SET vendor_id=$1, vendor_name=$2, status='assigned', updated_at=NOW() WHERE id=$3 RETURNING *",
+      [vendorId, vendorName, req.params.id]
+    );
+    res.json({ data: formatMaintenance(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/maintenance/:id/complete', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE maintenance_requests SET status='completed', completed_at=NOW(), updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatMaintenance(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PAYOUTS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/payouts', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM payouts WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'landlord') { query += ` AND landlord_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY scheduled_date DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatPayout) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/payouts/:id/process', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE payouts SET status='completed', processed_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatPayout(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/payouts/:id/retry', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE payouts SET status='processing', retry_count=retry_count+1 WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatPayout(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGES ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/messages/conversations', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT c.*, 
+        (SELECT row_to_json(m) FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC LIMIT 1) as last_message,
+        (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id AND m.is_read=false AND m.sender_id != $1) as unread_count
+       FROM conversations c
+       WHERE c.participants @> $2::jsonb
+       ORDER BY c.updated_at DESC`,
+      [req.user.id, JSON.stringify([{ id: req.user.id }])]
+    );
+    res.json({ data: result.rows.map(formatConversation) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/messages/:convId', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC',
+      [req.params.convId]
+    );
+    // Mark as read
+    await pool.query(
+      'UPDATE messages SET is_read=true WHERE conversation_id=$1 AND sender_id != $2',
+      [req.params.convId, req.user.id]
+    ).catch(() => {});
+    res.json({ data: result.rows.map(formatMessage) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/messages/conversations', auth, async (req, res) => {
+  try {
+    const { participantIds, participantDetails, propertyId, propertyTitle } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO conversations (id, participants, property_id, property_title, unread_count)
+       VALUES ($1,$2,$3,$4,0) RETURNING *`,
+      [id, JSON.stringify(participantDetails || participantIds), propertyId || null, propertyTitle || null]
+    );
+    res.status(201).json({ data: formatConversation(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/messages/:convId', auth, async (req, res) => {
+  try {
+    const { content } = req.body;
+    const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const sender = senderResult.rows[0];
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO messages (id, conversation_id, sender_id, sender_name, sender_avatar, content, is_read)
+       VALUES ($1,$2,$3,$4,$5,$6,false) RETURNING *`,
+      [id, req.params.convId, req.user.id, `${sender.first_name} ${sender.last_name}`, sender.avatar || null, content]
+    );
+    // Update conversation updated_at
+    await pool.query('UPDATE conversations SET updated_at=NOW() WHERE id=$1', [req.params.convId]).catch(() => {});
+    res.status(201).json({ data: formatMessage(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATIONS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/notifications', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
+      [req.user.id]
+    );
+    res.json({ data: result.rows.map(formatNotification) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/notifications/:id/read', auth, async (req, res) => {
+  try {
+    await pool.query('UPDATE notifications SET is_read=true WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/notifications/read-all', auth, async (req, res) => {
+  try {
+    await pool.query('UPDATE notifications SET is_read=true WHERE user_id=$1', [req.user.id]);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/notifications', auth, async (req, res) => {
+  try {
+    const { userId, type, title, body, actionUrl } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+       VALUES ($1,$2,$3,$4,$5,false,$6) RETURNING *`,
+      [id, userId || req.user.id, type, title, body, actionUrl || null]
+    );
+    res.status(201).json({ data: formatNotification(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VENDORS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/vendors', auth, async (req, res) => {
+  try {
+    const { category, district } = req.query;
+    let query = 'SELECT * FROM vendors WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (category) { query += ` AND category = $${i}`; params.push(category); i++; }
+    if (district) { query += ` AND district = $${i}`; params.push(district); i++; }
+    query += ' ORDER BY rating DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatVendor) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/vendors/:id', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM vendors WHERE id=$1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
+    res.json({ data: formatVendor(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/vendors', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const { firstName, lastName, email, phone, category, skills, bio, district, address, dailyRate, hourlyRate } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO vendors (id, first_name, last_name, email, phone, category, skills, bio, district, address,
+       daily_rate, hourly_rate, rating, total_ratings, total_jobs, completed_jobs, is_active, is_verified, is_suspended, availability)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0,0,0,0,true,false,false,'available') RETURNING *`,
+      [id, firstName, lastName, email, phone, category, JSON.stringify(skills || []), bio || null, district, address || null, dailyRate || null, hourlyRate || null]
+    );
+    res.status(201).json({ data: formatVendor(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/vendors/:id', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const { firstName, lastName, phone, category, skills, bio, district, address, dailyRate, hourlyRate, availability, isActive } = req.body;
+    const result = await pool.query(
+      `UPDATE vendors SET first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name),
+       phone=COALESCE($3,phone), category=COALESCE($4,category), skills=COALESCE($5,skills),
+       bio=COALESCE($6,bio), district=COALESCE($7,district), address=COALESCE($8,address),
+       daily_rate=COALESCE($9,daily_rate), hourly_rate=COALESCE($10,hourly_rate),
+       availability=COALESCE($11,availability), is_active=COALESCE($12,is_active)
+       WHERE id=$13 RETURNING *`,
+      [firstName, lastName, phone, category, skills ? JSON.stringify(skills) : null,
+       bio, district, address, dailyRate, hourlyRate, availability, isActive, req.params.id]
+    );
+    res.json({ data: formatVendor(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/vendors/:id/rate', auth, async (req, res) => {
+  try {
+    const { rating, jobId, comment, ratedByName } = req.body;
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO vendor_ratings (id, vendor_id, job_id, rated_by, rated_by_name, rating, comment)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [id, req.params.id, jobId || null, req.user.id, ratedByName || 'User', rating, comment || '']
+    ).catch(() => {});
+    // Recalculate average
+    const avgResult = await pool.query('SELECT AVG(rating) as avg, COUNT(*) as cnt FROM vendor_ratings WHERE vendor_id=$1', [req.params.id]);
+    const avg = parseFloat(avgResult.rows[0].avg) || rating;
+    const cnt = parseInt(avgResult.rows[0].cnt) || 1;
+    const result = await pool.query(
+      'UPDATE vendors SET rating=$1, total_ratings=$2 WHERE id=$3 RETURNING *',
+      [Math.round(avg * 10) / 10, cnt, req.params.id]
+    );
+    res.json({ data: formatVendor(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Vendor jobs
+app.get('/api/vendor-jobs', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM vendor_jobs WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'vendor') { query += ` AND vendor_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatVendorJob) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/vendor-jobs', auth, requireRole('admin', 'property_manager', 'landlord'), async (req, res) => {
+  try {
+    const { vendorId, vendorName, maintenanceRequestId, propertyTitle, propertyAddress, title, description, scheduledDate, estimatedCost, managerNotes } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO vendor_jobs (id, vendor_id, vendor_name, maintenance_request_id, property_title, property_address,
+       title, description, status, scheduled_date, estimated_cost, manager_notes, photos)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'assigned',$9,$10,$11,'[]') RETURNING *`,
+      [id, vendorId, vendorName, maintenanceRequestId || null, propertyTitle, propertyAddress || '',
+       title, description, scheduledDate || null, estimatedCost || null, managerNotes || null]
+    );
+    res.status(201).json({ data: formatVendorJob(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/vendor-jobs/:id', auth, async (req, res) => {
+  try {
+    const { status, actualCost, vendorNotes, rating, ratingComment } = req.body;
+    const result = await pool.query(
+      `UPDATE vendor_jobs SET status=COALESCE($1,status), actual_cost=COALESCE($2,actual_cost),
+       vendor_notes=COALESCE($3,vendor_notes), rating=COALESCE($4,rating),
+       rating_comment=COALESCE($5,rating_comment),
+       completed_date=CASE WHEN $1='completed' THEN NOW() ELSE completed_date END,
+       updated_at=NOW() WHERE id=$6 RETURNING *`,
+      [status, actualCost, vendorNotes, rating, ratingComment, req.params.id]
+    );
+    res.json({ data: formatVendorJob(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// VENDOR CONTRACTS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/contracts', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM vendor_contracts WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'vendor') { query += ` AND vendor_id = $${i}`; params.push(req.user.id); i++; }
+    else if (req.user.role === 'property_manager') { query += ` AND manager_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatContract) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/contracts', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const { vendorId, vendorName, propertyId, propertyTitle, type, description, amount, currency, startDate, endDate, paymentMethod, nextPaymentDate } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO vendor_contracts (id, vendor_id, vendor_name, property_id, property_title, manager_id,
+       type, description, amount, currency, start_date, end_date, status, payment_method, next_payment_date, total_paid, payments_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'active',$13,$14,0,0) RETURNING *`,
+      [id, vendorId, vendorName, propertyId, propertyTitle, req.user.id, type, description, amount, currency || 'UGX', startDate, endDate || null, paymentMethod, nextPaymentDate || null]
+    );
+    res.status(201).json({ data: formatContract(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/contracts/:id', auth, async (req, res) => {
+  try {
+    const { status, nextPaymentDate } = req.body;
+    const result = await pool.query(
+      'UPDATE vendor_contracts SET status=COALESCE($1,status), next_payment_date=COALESCE($2,next_payment_date), updated_at=NOW() WHERE id=$3 RETURNING *',
+      [status, nextPaymentDate, req.params.id]
+    );
+    res.json({ data: formatContract(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DOCUMENTS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/documents', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM documents WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role !== 'admin') { query += ` AND owner_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY uploaded_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatDocument) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/documents', auth, async (req, res) => {
+  try {
+    const { name, category, fileUrl, fileType, fileSize, expiresAt, ownerName, ownerRole } = req.body;
+    const id = uuidv4();
+    const userResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const user = userResult.rows[0];
+    const result = await pool.query(
+      `INSERT INTO documents (id, owner_id, owner_name, owner_role, name, category, status, file_url, file_type, file_size, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,$10) RETURNING *`,
+      [id, req.user.id, ownerName || `${user.first_name} ${user.last_name}`,
+       ownerRole || user.role, name, category, fileUrl || '', fileType || 'application/octet-stream',
+       fileSize || 0, expiresAt || null]
+    );
+    res.status(201).json({ data: formatDocument(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/documents/:id/approve', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const adminResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const admin = adminResult.rows[0];
+    const result = await pool.query(
+      `UPDATE documents SET status='approved', reviewed_by=$1, reviewed_at=NOW(), admin_notes=$2 WHERE id=$3 RETURNING *`,
+      [`${admin.first_name} ${admin.last_name}`, notes || 'Document verified and approved.', req.params.id]
+    );
+    res.json({ data: formatDocument(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/documents/:id/reject', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { notes } = req.body;
+    const adminResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const admin = adminResult.rows[0];
+    const result = await pool.query(
+      `UPDATE documents SET status='rejected', reviewed_by=$1, reviewed_at=NOW(), admin_notes=$2 WHERE id=$3 RETURNING *`,
+      [`${admin.first_name} ${admin.last_name}`, notes, req.params.id]
+    );
+    res.json({ data: formatDocument(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.delete('/api/documents/:id', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM documents WHERE id=$1 AND (owner_id=$2 OR $3=true)',
+      [req.params.id, req.user.id, req.user.role === 'admin']);
+    res.json({ data: { success: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTICES ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/notices', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM tenant_notices WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role === 'tenant') { query += ` AND tenant_id = $${i}`; params.push(req.user.id); i++; }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatNotice) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/notices', auth, requireRole('admin', 'property_manager', 'landlord'), async (req, res) => {
+  try {
+    const { propertyId, propertyTitle, tenantId, tenantName, type, subject, body, effectiveDate, responseDeadline, requiresAcknowledgement, attachmentUrl } = req.body;
+    const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const sender = senderResult.rows[0];
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO tenant_notices (id, property_id, property_title, tenant_id, tenant_name,
+       issued_by, issued_by_role, type, subject, body, effective_date, response_deadline,
+       status, requires_acknowledgement, attachment_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'unread',$13,$14) RETURNING *`,
+      [id, propertyId, propertyTitle, tenantId, tenantName,
+       `${sender.first_name} ${sender.last_name}`, sender.role,
+       type, subject, body, effectiveDate || null, responseDeadline || null,
+       requiresAcknowledgement || false, attachmentUrl || null]
+    );
+    res.status(201).json({ data: formatNotice(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/notices/:id/acknowledge', auth, requireRole('tenant'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE tenant_notices SET status='acknowledged', acknowledged_at=NOW() WHERE id=$1 AND tenant_id=$2 RETURNING *",
+      [req.params.id, req.user.id]
+    );
+    res.json({ data: formatNotice(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/notices/:id/read', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE tenant_notices SET status=CASE WHEN status='unread' THEN 'read' ELSE status END, read_at=COALESCE(read_at,NOW()) WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatNotice(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DISPUTES ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/disputes', auth, async (req, res) => {
+  try {
+    let query = 'SELECT * FROM disputes WHERE 1=1';
+    const params = [];
+    let i = 1;
+    if (req.user.role !== 'admin') {
+      query += ` AND (raised_by_id = $${i} OR against_id = $${i})`;
+      params.push(req.user.id); i++;
+    }
+    query += ' ORDER BY created_at DESC';
+    const result = await pool.query(query, params);
+    res.json({ data: result.rows.map(formatDispute) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/disputes', auth, async (req, res) => {
+  try {
+    const { type, againstId, againstName, againstRole, propertyId, propertyTitle, transactionId, subject, description, evidence, amount } = req.body;
+    const userResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const user = userResult.rows[0];
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO disputes (id, type, status, raised_by_id, raised_by_name, raised_by_role,
+       against_id, against_name, against_role, property_id, property_title, transaction_id,
+       subject, description, evidence, amount)
+       VALUES ($1,$2,'open',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [id, type, req.user.id, `${user.first_name} ${user.last_name}`, user.role,
+       againstId || null, againstName || null, againstRole || null,
+       propertyId || null, propertyTitle || null, transactionId || null,
+       subject, description, evidence || null, amount || null]
+    );
+    res.status(201).json({ data: formatDispute(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/disputes/:id/resolve', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { resolution } = req.body;
+    const adminResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const admin = adminResult.rows[0];
+    const result = await pool.query(
+      `UPDATE disputes SET status='resolved', resolution=$1, resolved_by_id=$2, resolved_by_name=$3,
+       resolved_at=NOW(), updated_at=NOW() WHERE id=$4 RETURNING *`,
+      [resolution, req.user.id, `${admin.first_name} ${admin.last_name}`, req.params.id]
+    );
+    res.json({ data: formatDispute(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/disputes/:id/dismiss', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      "UPDATE disputes SET status='dismissed', updated_at=NOW() WHERE id=$1 RETURNING *",
+      [req.params.id]
+    );
+    res.json({ data: formatDispute(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANALYTICS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/analytics/dashboard', auth, async (req, res) => {
+  try {
+    const [props, tenants, maintenance, payments, payouts, inspFees] = await Promise.all([
+      pool.query(`SELECT COUNT(*) as total,
+        COUNT(CASE WHEN status='published' THEN 1 END) as vacant,
+        COUNT(CASE WHEN status='rented' THEN 1 END) as occupied
+        FROM properties`),
+      pool.query("SELECT COUNT(*) FROM users WHERE role='tenant'"),
+      pool.query("SELECT COUNT(*) FROM maintenance_requests WHERE status NOT IN ('completed','cancelled')"),
+      pool.query("SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE status='completed' AND created_at >= date_trunc('month', NOW())"),
+      pool.query("SELECT COUNT(*) FROM payouts WHERE status='pending'"),
+      pool.query("SELECT COALESCE(SUM(amount),0) as total FROM payments WHERE type='inspection_fee' AND status='completed' AND created_at >= date_trunc('month', NOW())"),
+    ]);
+    const totalProps = parseInt(props.rows[0].total);
+    const occupied = parseInt(props.rows[0].occupied);
+    const conversionRate = totalProps > 0 ? Math.round((occupied / totalProps) * 100) : 0;
+    res.json({
+      data: {
+        totalProperties: totalProps,
+        vacantProperties: parseInt(props.rows[0].vacant),
+        occupiedProperties: occupied,
+        totalTenants: parseInt(tenants.rows[0].count),
+        pendingMaintenance: parseInt(maintenance.rows[0].count),
+        monthlyRevenue: parseInt(payments.rows[0].total),
+        pendingPayouts: parseInt(payouts.rows[0].count),
+        inspectionFeeRevenue: parseInt(inspFees.rows[0].total),
+        conversionRate,
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/analytics/revenue', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT date_trunc('month', created_at) as month, SUM(amount) as total
+       FROM payments WHERE status='completed'
+       GROUP BY month ORDER BY month DESC LIMIT 12`
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/analytics/occupancy', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT district, COUNT(*) as total,
+       COUNT(CASE WHEN status='rented' THEN 1 END) as occupied
+       FROM properties GROUP BY district`
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUDIT LOGS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/audit-logs', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200');
+    res.json({ data: result.rows.map(formatAuditLog) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/audit-logs', auth, async (req, res) => {
+  try {
+    const { action, performedByName, performedByRole, targetId, targetName, description, metadata } = req.body;
+    const id = uuidv4();
+    await pool.query(
+      `INSERT INTO audit_logs (id, action, performed_by, performed_by_name, performed_by_role, target_id, target_name, description, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [id, action, req.user.id, performedByName, performedByRole, targetId || null, targetName || null, description, metadata ? JSON.stringify(metadata) : null]
+    );
+    res.status(201).json({ data: { success: true } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANNOUNCEMENTS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/announcements', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM announcements WHERE target_roles @> $1::jsonb OR target_roles = '[]'::jsonb ORDER BY created_at DESC LIMIT 20`,
+      [JSON.stringify([req.user.role])]
+    );
+    res.json({ data: result.rows.map(formatAnnouncement) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/announcements', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { title, body, targetRoles } = req.body;
+    const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
+    const sender = senderResult.rows[0];
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO announcements (id, title, body, target_roles, sent_by, sent_by_name)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [id, title, body, JSON.stringify(targetRoles || []), req.user.id, `${sender.first_name} ${sender.last_name}`]
+    );
+    res.status(201).json({ data: formatAnnouncement(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AGENT APPLICATIONS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/agent-applications', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM agent_applications ORDER BY created_at DESC');
+    res.json({ data: result.rows.map(formatAgentApplication) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/agent-applications', async (req, res) => {
+  try {
+    const { userId, firstName, lastName, email, phone, role, nationalIdNumber, experience, districts, motivation } = req.body;
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO agent_applications (id, user_id, first_name, last_name, email, phone, role,
+       national_id_number, experience, districts, motivation, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') RETURNING *`,
+      [id, userId || null, firstName, lastName, email, phone, role || 'agent',
+       nationalIdNumber || null, experience, JSON.stringify(districts || []), motivation]
+    );
+    res.status(201).json({ data: formatAgentApplication(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { adminNote } = req.body;
+    const result = await pool.query(
+      "UPDATE agent_applications SET status='approved', admin_note=$1, reviewed_at=NOW() WHERE id=$2 RETURNING *",
+      [adminNote || '', req.params.id]
+    );
+    res.json({ data: formatAgentApplication(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { adminNote } = req.body;
+    const result = await pool.query(
+      "UPDATE agent_applications SET status='rejected', admin_note=$1, reviewed_at=NOW() WHERE id=$2 RETURNING *",
+      [adminNote || '', req.params.id]
+    );
+    res.json({ data: formatAgentApplication(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PAYMENT PREFERENCES ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/payment-preferences/:userId', auth, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM payment_preferences WHERE user_id=$1', [req.params.userId]);
+    res.json({ data: result.rows[0] || null });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/payment-preferences', auth, async (req, res) => {
+  try {
+    const { preferredMethod, mtnPhone, airtelPhone, bankName, bankAccountNumber, bankAccountName } = req.body;
+    const result = await pool.query(
+      `INSERT INTO payment_preferences (user_id, preferred_method, mtn_phone, airtel_phone, bank_name, bank_account_number, bank_account_name, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         preferred_method=EXCLUDED.preferred_method, mtn_phone=EXCLUDED.mtn_phone,
+         airtel_phone=EXCLUDED.airtel_phone, bank_name=EXCLUDED.bank_name,
+         bank_account_number=EXCLUDED.bank_account_number, bank_account_name=EXCLUDED.bank_account_name,
+         updated_at=NOW()
+       RETURNING *`,
+      [req.user.id, preferredMethod, mtnPhone || null, airtelPhone || null, bankName || null, bankAccountNumber || null, bankAccountName || null]
+    );
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// START SERVER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.listen(PORT, () => {
+  console.log(`ITAB backend running on port ${PORT}`);
+});
+
+module.exports = app;

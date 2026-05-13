@@ -48,17 +48,53 @@ export function perm(
 }
 
 // ─── Data filters ─────────────────────────────────────────────────────────────
+/**
+ * Property visibility rules:
+ * - draft / pending_vetting / rejected → ONLY visible to the creator (managerId, landlordId)
+ *   and to admin. Nobody else can see them.
+ * - published / rented / under_maintenance → visible per role rules below.
+ */
 export function filterPropertiesForUser(properties: Property[], user: User | null): Property[] {
-  if (!user) return properties.filter(p => p.status === 'published');
-  switch (user.role) {
-    case 'admin':            return properties;
-    case 'property_manager': return properties.filter(p => p.managerId === user.id || !p.managerId);
-    case 'landlord':         return properties.filter(p => p.landlordId === user.id);
-    case 'tenant':           return properties.filter(p => p.status === 'published' || p.tenantId === user.id);
-    case 'agent':            return properties.filter(p => p.managerId === user.id || p.status === 'published' || (!p.managerId && p.id.startsWith('p_')));
-    case 'vendor':           return properties.filter(p => p.status === 'published');
-    default:                 return properties.filter(p => p.status === 'published');
+  if (!user) {
+    // Unauthenticated visitors: only published
+    return properties.filter(p => p.status === 'published');
   }
+
+  // Admin sees everything
+  if (user.role === 'admin') return properties;
+
+  return properties.filter(p => {
+    const isPublicStatus = p.status === 'published' || p.status === 'rented' || p.status === 'under_maintenance';
+    const isCreator =
+      p.managerId === user.id ||
+      p.landlordId === user.id ||
+      (user.role === 'agent' && p.managerId === user.id);
+
+    // Non-public statuses: only the creator can see them
+    if (!isPublicStatus) {
+      return isCreator;
+    }
+
+    // Public statuses: apply role-based visibility
+    switch (user.role) {
+      case 'property_manager':
+        // Manager sees all public + their own drafts/pending
+        return isPublicStatus || p.managerId === user.id;
+      case 'landlord':
+        // Landlord sees their own properties (any status) + all published
+        return p.landlordId === user.id || isPublicStatus;
+      case 'tenant':
+        // Tenant sees published + their rented property
+        return p.status === 'published' || p.tenantId === user.id;
+      case 'agent':
+        // Agent sees their own listings (any status) + all published
+        return p.managerId === user.id || p.status === 'published';
+      case 'vendor':
+        return p.status === 'published';
+      default:
+        return p.status === 'published';
+    }
+  });
 }
 
 export function filterPaymentsForUser(payments: Payment[], user: User | null): Payment[] {

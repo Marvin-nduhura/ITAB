@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
 import { TrendingUp, Building2, DollarSign, Calendar, Users, Scale, Receipt, AlertCircle } from 'lucide-react';
 import { StatCard } from '../components/ui/Card';
-import { mockDashboardStats } from '../lib/mockData';
 import { formatCurrency } from '../lib/utils';
 import { useAuthStore } from '../store/authStore';
 import { usePropertyStore } from '../store/propertyStore';
@@ -40,10 +39,13 @@ export function AnalyticsPage() {
   // Scope analytics to properties this user manages/owns
   const properties = filterPropertiesForUser(allProperties, user);
   const stats = {
-    ...mockDashboardStats,
-    totalProperties: properties.length,
-    vacantProperties: properties.filter(p => p.status === 'published').length,
-    occupiedProperties: properties.filter(p => p.status === 'rented').length,
+    totalProperties:      properties.length,
+    vacantProperties:     properties.filter(p => p.status === 'published').length,
+    occupiedProperties:   properties.filter(p => p.status === 'rented').length,
+    monthlyRevenue:       0,
+    conversionRate:       properties.length > 0 ? Math.round((properties.filter(p => p.status === 'rented').length / properties.length) * 100) : 0,
+    inspectionFeeRevenue: 0,
+    pendingPayouts:       0,
   };
 
   const platformRevenue = getPlatformRevenue();

@@ -6,18 +6,19 @@ import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
-import { mockUsers } from '../../lib/mockData';
+import { useUserStore } from '../../store/userStore';
 import { formatCurrency } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
 export function UnassignedProperties() {
   const { properties, updateProperty } = usePropertyStore();
+  const { users } = useUserStore();
   const [selected, setSelected] = useState<string | null>(null);
   const [assignTo, setAssignTo] = useState('');
 
   // Properties with no manager assigned
   const unassigned = properties.filter(p => !p.managerId && p.status !== 'rejected');
-  const managers = mockUsers.filter(u => u.role === 'property_manager');
+  const managers = users.filter(u => u.role === 'property_manager');
 
   const handleAssign = () => {
     if (!selected || !assignTo) { toast.error('Select a manager'); return; }

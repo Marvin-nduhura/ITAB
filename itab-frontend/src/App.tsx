@@ -7,10 +7,9 @@ import { PageLoader } from './components/ui/EmptyState';
 import { InstallPrompt } from './components/pwa/InstallPrompt';
 import { useAuthStore } from './store/authStore';
 import { useUIStore, applyTheme } from './store/uiStore';
-import { useNotificationStore } from './store/notificationStore';
 import { registerServiceWorker, setupOnlineOfflineListeners } from './lib/sync';
-import { mockNotifications } from './lib/mockData';
 import { canAccessRoute } from './lib/rbac';
+import { useBackendSync } from './hooks/useBackendSync';
 
 // Lazy-loaded pages
 const LandingPage      = lazy(() => import('./pages/LandingPage').then(m => ({ default: m.LandingPage })));
@@ -86,8 +85,10 @@ function LandingOrDashboard() {
 }
 export default function App() {
   const { theme } = useUIStore();
-  const { setNotifications } = useNotificationStore();
   const { isAuthenticated, syncWithBackend } = useAuthStore();
+
+  // Wire backend sync — runs on mount, on reconnect, and every 30s
+  useBackendSync();
 
   useEffect(() => {
     // Apply theme on mount
@@ -103,9 +104,6 @@ export default function App() {
 
     // Setup online/offline listeners
     setupOnlineOfflineListeners();
-
-    // Load mock notifications
-    setNotifications(mockNotifications);
 
     // Sync user data from backend if authenticated
     if (isAuthenticated) {

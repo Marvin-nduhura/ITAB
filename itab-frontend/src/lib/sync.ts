@@ -1,3 +1,15 @@
+/**
+ * Offline sync engine.
+ *
+ * When the user is offline, writes are queued in IndexedDB.
+ * When they come back online:
+ *   1. Process the queue (oldest first).
+ *   2. On conflict (409), the backend wins — discard the local change.
+ *   3. On success, remove the item from the queue.
+ *   4. After the queue is clear, trigger a full data re-fetch so the UI
+ *      reflects the latest server state across all devices.
+ */
+
 import { getPendingSyncItems, updateSyncItem, removeSyncItem } from './db';
 import { api } from './api';
 import { useUIStore } from '../store/uiStore';
@@ -25,12 +37,20 @@ export async function processSyncQueue(): Promise<void> {
       }
 
       await removeSyncItem(item.id);
-    } catch {
-      const retryCount = item.retryCount + 1;
-      if (retryCount >= 5) {
-        await updateSyncItem(item.id, { status: 'failed', retryCount });
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+
+      if (status === 409) {
+        // Conflict — backend wins, discard local change
+        await removeSyncItem(item.id);
+        console.warn(`[sync] Conflict on ${item.entity} — backend version kept`);
       } else {
-        await updateSyncItem(item.id, { status: 'pending', retryCount });
+        const retryCount = item.retryCount + 1;
+        if (retryCount >= 5) {
+          await updateSyncItem(item.id, { status: 'failed', retryCount });
+        } else {
+          await updateSyncItem(item.id, { status: 'pending', retryCount });
+        }
       }
     }
   }
@@ -40,8 +60,6 @@ export async function processSyncQueue(): Promise<void> {
 }
 
 export function registerServiceWorker(): void {
-  // vite-plugin-pwa auto-registers the generated SW via virtual:pwa-register.
-  // We only need to set up the online/offline listeners and message handler here.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', event => {
       if (event.data?.type === 'SYNC_QUEUE') {
@@ -54,9 +72,11 @@ export function registerServiceWorker(): void {
 export function setupOnlineOfflineListeners(): void {
   const { setOnline } = useUIStore.getState();
 
-  window.addEventListener('online', () => {
+  window.addEventListener('online', async () => {
     setOnline(true);
-    processSyncQueue();
+    // Process any queued writes first, then the useBackendSync hook
+    // will re-fetch fresh data via its isOnline effect.
+    await processSyncQueue();
   });
 
   window.addEventListener('offline', () => {

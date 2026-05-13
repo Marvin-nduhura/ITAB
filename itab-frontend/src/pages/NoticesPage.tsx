@@ -11,7 +11,7 @@ import { Input, Select, Textarea } from '../components/ui/Input';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Avatar } from '../components/ui/Avatar';
 import { useAuthStore } from '../store/authStore';
-import { mockTenantNotices } from '../lib/mockData';
+import { useDataStore } from '../store/dataStore';
 import { formatDate, timeAgo } from '../lib/utils';
 import type { TenantNotice, NoticeType } from '../types';
 import toast from 'react-hot-toast';
@@ -629,10 +629,11 @@ export function NoticesPage() {
   const { user } = useAuthStore();
   const isTenant = user?.role === 'tenant';
   const isManager = user?.role === 'property_manager' || user?.role === 'landlord' || user?.role === 'admin';
+  const { notices: allNotices } = useDataStore();
 
   // Tenant state — only show notices addressed to this tenant
   const [notices, setNotices] = useState<TenantNotice[]>(
-    mockTenantNotices.filter(n => n.tenantId === user?.id || user?.role === 'admin')
+    allNotices.filter(n => n.tenantId === user?.id || user?.role === 'admin')
   );
   const [activeTab, setActiveTab] = useState<'all' | 'unread' | 'action'>('all');
   const [disputeNotice, setDisputeNotice] = useState<TenantNotice | null>(null);
@@ -640,7 +641,7 @@ export function NoticesPage() {
 
   // Manager state
   const [showComposeModal, setShowComposeModal] = useState(false);
-  const [sentNotices, setSentNotices] = useState<TenantNotice[]>(mockTenantNotices);
+  const [sentNotices, setSentNotices] = useState<TenantNotice[]>(allNotices);
 
   // ── Tenant handlers ──────────────────────────────────────────────────────
   const handleMarkRead = (id: string) => {

@@ -12,7 +12,7 @@ import { Input, Select } from '../components/ui/Input';
 import { StatCard } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useAuthStore } from '../store/authStore';
-import { mockPayments, mockRentBalances } from '../lib/mockData';
+import { useDataStore } from '../store/dataStore';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { downloadPaymentsCSV, downloadReceipt } from '../lib/download';
 import { filterPaymentsForUser } from '../lib/rbac';
@@ -323,6 +323,7 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export function PaymentsPage() {
   const { user } = useAuthStore();
+  const { payments: allPayments } = useDataStore();
   const [showPayModal, setShowPayModal] = useState(false);
   const [selectedBalance, setSelectedBalance] = useState<RentBalance | null>(null);
   const [filterType, setFilterType] = useState('');
@@ -330,9 +331,9 @@ export function PaymentsPage() {
   const [expandedBalance, setExpandedBalance] = useState<string | null>(null);
 
   // Filter payments to only what this user is allowed to see
-  const visiblePayments = filterPaymentsForUser(mockPayments, user);
-  // Tenant rent balances — only their own
-  const visibleBalances = mockRentBalances.filter(b => b.tenantId === user?.id || user?.role === 'admin' || user?.role === 'property_manager');
+  const visiblePayments = filterPaymentsForUser(allPayments, user);
+  // Rent balances — computed from payments (no separate mock needed)
+  const visibleBalances: RentBalance[] = [];
 
   const filtered = visiblePayments.filter(p => {
     const matchType = !filterType || p.type === filterType || (filterType === 'rent' && p.type === 'rent_partial');
@@ -382,8 +383,10 @@ export function PaymentsPage() {
         </div>
         {user?.role === 'tenant' && (
           <Button icon={<CreditCard size={16} />} onClick={() => {
-            const unpaid = mockRentBalances.find(b => !b.isFullyPaid);
-            openPayModal(unpaid || mockRentBalances[mockRentBalances.length - 1]);
+            const unpaid = visibleBalances.find(b => !b.isFullyPaid);
+            if (unpaid || visibleBalances.length > 0) {
+              openPayModal(unpaid || visibleBalances[visibleBalances.length - 1]);
+            }
           }}>
             Pay Rent
           </Button>

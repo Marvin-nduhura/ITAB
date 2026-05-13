@@ -12,7 +12,6 @@ import { Input } from '../../components/ui/Input';
 import { useAuthStore } from '../../store/authStore';
 import { useUserStore } from '../../store/userStore';
 import { authApi, authGoogleApi } from '../../lib/api';
-import { mockUsers } from '../../lib/mockData';
 
 const schema = z.object({
   email: z.string().email('Enter a valid email'),
@@ -78,25 +77,12 @@ export function LoginPage() {
           navigate('/dashboard');
           return;
         } catch {
-          // Backend unavailable — fall back to mock data
+          // Backend unavailable — fall through to register redirect
         }
 
-        // Check if user exists in mock data
-        const existingUser = mockUsers.find(u => u.email === googleUser.email);
-        if (existingUser) {
-          const suspensionCheck = isSuspended(existingUser.email);
-          if (suspensionCheck.suspended) {
-            toast.error(`Account suspended: ${suspensionCheck.reason || 'Contact support@itab.ug'}`, { duration: 8000, icon: '🚫' });
-            return;
-          }
-          setAuth(existingUser, `google_token_${existingUser.id}`);
-          toast.success(`Welcome back, ${existingUser.firstName}! 👋`);
-          navigate('/dashboard');
-        } else {
-          // New Google user — redirect to register page so they can pick their role
-          navigate(`/register?google=1&email=${encodeURIComponent(googleUser.email)}&firstName=${encodeURIComponent(googleUser.given_name || '')}&lastName=${encodeURIComponent(googleUser.family_name || '')}`);
-          toast(`New to ITAB? Please choose your role to complete sign-up.`, { icon: '👋', duration: 5000 });
-        }
+        // Backend unavailable — redirect new Google users to register
+        navigate(`/register?google=1&email=${encodeURIComponent(googleUser.email)}&firstName=${encodeURIComponent(googleUser.given_name || '')}&lastName=${encodeURIComponent(googleUser.family_name || '')}`);
+        toast(`New to ITAB? Please choose your role to complete sign-up.`, { icon: '👋', duration: 5000 });
       } catch {
         toast.error('Google sign-in failed. Please try again.');
       } finally {
@@ -148,24 +134,10 @@ export function LoginPage() {
         // Backend unavailable — fall back to mock
       }
 
-      // Mock fallback
-      await new Promise(r => setTimeout(r, 800));
-      const user = mockUsers.find(u => u.email === data.email);
-      if (!user) throw new Error('Invalid credentials');
-
-      const suspensionCheck = isSuspended(data.email);
-      if (suspensionCheck.suspended) {
-        toast.error(
-          `Your account has been suspended.\n${suspensionCheck.reason ? `Reason: ${suspensionCheck.reason}` : 'Please contact support at support@itab.ug'}`,
-          { duration: 8000, icon: '🚫' }
-        );
-        setLoading(false);
-        return;
-      }
-
-      setAuth(user, `mock_token_${user.id}`);
-      toast.success(`Welcome back, ${user.firstName}!`);
-      navigate('/dashboard');
+      // Backend unavailable — show error, don't fall back to mock for security
+      toast.error('Unable to connect to server. Please check your connection and try again.');
+      setLoading(false);
+      return;
     } catch {
       toast.error('Invalid email or password');
     } finally {
