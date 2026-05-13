@@ -136,7 +136,6 @@ export function LoginPage() {
           setLoading(false);
           return;
         }
-        // Backend unavailable — fall back to mock
       }
 
       // Backend unavailable — show error, don't fall back to mock for security

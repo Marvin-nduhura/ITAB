@@ -228,21 +228,6 @@ export function RegisterPage() {
 
     setLoading(true);
     try {
-      const newUser = {
-        id:          `u_${Date.now()}`,
-        email:       data.email,
-        phone:       data.phone,
-        firstName:   data.firstName,
-        lastName:    data.lastName,
-        role:        data.role as UserRole,
-        isVerified:  false,
-        isSuspended: false,
-        kycStatus:   'pending' as const,
-        approvalStatus: 'approved' as const,
-        createdAt:   new Date().toISOString(),
-        updatedAt:   new Date().toISOString(),
-      };
-
       // Try backend first
       try {
         const res = await authApi.register({
@@ -250,7 +235,7 @@ export function RegisterPage() {
           email: data.email, phone: data.phone,
           password: data.password, role: data.role,
         });
-        const { user: backendUser, token } = (res.data as { data: { user: typeof newUser; token: string } }).data;
+        const { user: backendUser, token } = (res.data as { data: { user: User; token: string } }).data;
         setAuth(backendUser, token);
         addUser(backendUser);
       } catch (err: unknown) {
@@ -260,12 +245,13 @@ export function RegisterPage() {
           setLoading(false);
           return;
         }
-        setAuth(newUser, `mock_token_${newUser.id}`);
-        addUser(newUser);
+        toast.error(ax.response?.data?.message || 'Registration failed. Check your connection and try again.');
+        setLoading(false);
+        return;
       }
 
       const roleLabel = ROLE_OPTIONS.find(r => r.value === data.role)?.label ?? data.role;
-      toast.success(`Welcome to ITAB, ${newUser.firstName}! Registered as ${roleLabel} 🎉`);
+      toast.success(`Welcome to ITAB, ${data.firstName}! Registered as ${roleLabel} 🎉`);
       navigate('/dashboard');
     } catch {
       toast.error('Registration failed. Please try again.');

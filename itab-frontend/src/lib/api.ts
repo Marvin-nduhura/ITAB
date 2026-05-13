@@ -226,6 +226,13 @@ export const paymentPreferencesApi = {
   save: (data: unknown) => api.post<ApiResponse<unknown>>('/payment-preferences', data),
 };
 
+/** Global fee & company account settings (Render Postgres `platform_settings`). */
+export const platformSettingsApi = {
+  get: () => api.get<ApiResponse<{ feeConfig: Record<string, unknown>; companyAccounts: Record<string, unknown>; updatedAt?: string | null }>>('/platform-settings'),
+  put: (data: { feeConfig?: unknown; companyAccounts?: unknown }) =>
+    api.put<ApiResponse<{ feeConfig: Record<string, unknown>; companyAccounts: Record<string, unknown>; updatedAt?: string | null }>>('/platform-settings', data),
+};
+
 // ─── Bulk Sync ────────────────────────────────────────────────────────────────
 // Calls all relevant endpoints in parallel and returns combined data.
 // Each key maps to the resolved data array (or null on error).

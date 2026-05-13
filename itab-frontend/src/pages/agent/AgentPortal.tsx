@@ -1,53 +1,47 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Send, Eye, CheckCircle2, Clock,
-  DollarSign, Star, MessageSquare, Building2,
+  DollarSign, Star, Building2,
 } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
-import { Modal } from '../../components/ui/Modal';
 import { StatCard } from '../../components/ui/Card';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
 import { useAuthStore } from '../../store/authStore';
+import { usePaymentStore } from '../../store/paymentStore';
 import { PropertyFormModal } from '../../components/property/PropertyFormModal';
 import { formatCurrency, formatDate, propertyStatusConfig } from '../../lib/utils';
 import toast from 'react-hot-toast';
-import type { Property } from '../../types';
-
-// Mock agent-specific data
-const mockCommissions = [
-  { id: 'c1', propertyTitle: '3-Bedroom Apartment in Kololo', type: 'Lease Signed', amount: 250000, status: 'paid', date: '2024-03-10' },
-  { id: 'c2', propertyTitle: 'Studio Apartment in Bukoto', type: 'Inspection Fee Share', amount: 50000, status: 'pending', date: '2024-04-01' },
-];
-
-const mockFeedback: Record<string, { message: string; date: string; resolved: boolean }> = {
-  'p3': { message: 'Please add more photos of the interior. Also verify the WiFi speed claim.', date: '2024-02-18T10:00:00Z', resolved: false },
-};
 
 export function AgentPortal() {
   const { user } = useAuthStore();
   const { properties, updateProperty } = usePropertyStore();
   const navigate = useNavigate();
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showFeedback, setShowFeedback] = useState<Property | null>(null);
   const [_showClaimPool, setShowClaimPool] = useState(false);
   const [tab, setTab] = useState<'my_listings' | 'commissions' | 'pool'>('my_listings');
+  const transactions = usePaymentStore(s => s.transactions);
 
-  // Agent's properties — only those they created or are assigned to
   const myProperties = properties.filter(p =>
     p.managerId === user?.id ||
-    (!p.managerId && p.id.startsWith('p_')) // user-created with no manager yet
+    (!p.managerId && p.id.startsWith('p_'))
   );
 
-  // Unassigned pool
   const unassignedPool = properties.filter(p => !p.managerId && p.status !== 'rejected');
 
-  const totalCommission = mockCommissions.reduce((s, c) => s + c.amount, 0);
-  const paidCommission = mockCommissions.filter(c => c.status === 'paid').reduce((s, c) => s + c.amount, 0);
-  const pendingCommission = mockCommissions.filter(c => c.status === 'pending').reduce((s, c) => s + c.amount, 0);
+  const agentIncoming = useMemo(() => {
+    if (!user?.id) return [];
+    return transactions.filter(
+      t => t.receiverId === user.id && ['completed', 'processing', 'pending'].includes(t.status)
+    );
+  }, [transactions, user?.id]);
+
+  const totalCommission = agentIncoming.reduce((s, t) => s + t.amount, 0);
+  const paidCommission = agentIncoming.filter(t => t.status === 'completed').reduce((s, t) => s + t.amount, 0);
+  const pendingCommission = agentIncoming.filter(t => t.status === 'pending' || t.status === 'processing').reduce((s, t) => s + t.amount, 0);
 
   const submitForApproval = (propertyId: string) => {
     updateProperty(propertyId, { status: 'pending_vetting' });
@@ -108,7 +102,6 @@ export function AgentPortal() {
         ) : (
           <div className="space-y-3">
             {myProperties.map((p, i) => {
-              const hasFeedback = !!mockFeedback[p.id];
               const sc = propertyStatusConfig[p.status] || { label: p.status, color: 'badge-gray' };
               return (
                 <motion.div key={p.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
@@ -121,14 +114,14 @@ export function AgentPortal() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <h3 className="font-bold text-slate-900 dark:text-slate-100 text-sm">{p.title}</h3>
                           <Badge variant={statusVariant(p.status)}>{sc.label}</Badge>
-                          {hasFeedback && !mockFeedback[p.id].resolved && (
-                            <Badge variant="red">Manager Feedback</Badge>
+                          {p.status === 'rejected' && (
+                            <Badge variant="red">Needs update</Badge>
                           )}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5">{p.address} · {formatCurrency(p.rentPrice)}/mo</p>
-                        {hasFeedback && !mockFeedback[p.id].resolved && (
-                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 line-clamp-1">
-                            💬 "{mockFeedback[p.id].message}"
+                        {p.status === 'rejected' && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                            This listing was not approved. Update the details and resubmit for vetting.
                           </p>
                         )}
                       </div>
@@ -137,11 +130,6 @@ export function AgentPortal() {
                       <Button size="sm" variant="secondary" icon={<Eye size={12} />} onClick={() => navigate(`/properties/${p.id}`)}>View</Button>
                       {p.status === 'draft' && (
                         <Button size="sm" icon={<Send size={12} />} onClick={() => submitForApproval(p.id)}>Submit</Button>
-                      )}
-                      {hasFeedback && !mockFeedback[p.id].resolved && (
-                        <Button size="sm" variant="secondary" icon={<MessageSquare size={12} />} onClick={() => setShowFeedback(p)}>
-                          Feedback
-                        </Button>
                       )}
                     </div>
                   </div>
@@ -152,28 +140,36 @@ export function AgentPortal() {
         )
       )}
 
-      {/* Commissions */}
+      {/* Commissions — from synced platform transactions (Render-backed store) */}
       {tab === 'commissions' && (
-        <div className="space-y-3">
-          {mockCommissions.map((c, i) => (
-            <motion.div key={c.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-              className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-5 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${c.status === 'paid' ? 'bg-green-100 dark:bg-green-900/30' : 'bg-yellow-100 dark:bg-yellow-900/30'}`}>
-                  {c.status === 'paid' ? <CheckCircle2 size={18} className="text-green-600" /> : <Clock size={18} className="text-yellow-600" />}
+        agentIncoming.length === 0 ? (
+          <EmptyState
+            icon={<DollarSign size={28} />}
+            title="No commission activity yet"
+            description="Payments where you are the recipient will appear here after they sync from the server."
+          />
+        ) : (
+          <div className="space-y-3">
+            {agentIncoming.map((c, i) => (
+              <motion.div key={c.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-5 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${c.status === 'completed' ? 'bg-green-100 dark:bg-green-900/30' : 'bg-yellow-100 dark:bg-yellow-900/30'}`}>
+                    {c.status === 'completed' ? <CheckCircle2 size={18} className="text-green-600" /> : <Clock size={18} className="text-yellow-600" />}
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{c.propertyTitle || c.description}</p>
+                    <p className="text-xs text-slate-400">{c.type.replace(/_/g, ' ')} · {formatDate(c.createdAt)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{c.propertyTitle}</p>
-                  <p className="text-xs text-slate-400">{c.type} · {formatDate(c.date)}</p>
+                <div className="text-right">
+                  <p className="font-bold text-green-600">{formatCurrency(c.amount)}</p>
+                  <Badge variant={c.status === 'completed' ? 'green' : 'yellow'}>{c.status}</Badge>
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="font-bold text-green-600">{formatCurrency(c.amount)}</p>
-                <Badge variant={c.status === 'paid' ? 'green' : 'yellow'}>{c.status}</Badge>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+              </motion.div>
+            ))}
+          </div>
+        )
       )}
 
       {/* Unassigned Pool */}
@@ -205,21 +201,6 @@ export function AgentPortal() {
 
       {/* Add Property Modal */}
       <PropertyFormModal open={showAddModal} onClose={() => setShowAddModal(false)} />
-
-      {/* Manager Feedback Modal */}
-      <Modal open={!!showFeedback} onClose={() => setShowFeedback(null)} title="Manager Feedback"
-        footer={<><Button variant="secondary" onClick={() => setShowFeedback(null)}>Close</Button><Button onClick={() => { setShowFeedback(null); setShowAddModal(true); toast('Update your listing and resubmit for approval.'); }}>Update Listing</Button></>}>
-        {showFeedback && mockFeedback[showFeedback.id] && (
-          <div className="space-y-4">
-            <div className="p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
-              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 mb-1">Manager's Comments</p>
-              <p className="text-sm text-amber-700 dark:text-amber-400">{mockFeedback[showFeedback.id].message}</p>
-              <p className="text-xs text-amber-500 mt-2">{formatDate(mockFeedback[showFeedback.id].date)}</p>
-            </div>
-            <p className="text-sm text-slate-500">Update your listing based on the feedback above, then resubmit for approval.</p>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }

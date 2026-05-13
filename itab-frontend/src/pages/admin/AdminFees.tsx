@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Settings2, Save, AlertCircle, CheckCircle2, DollarSign,
@@ -11,6 +11,7 @@ import { Card } from '../../components/ui/Card';
 import { usePaymentStore } from '../../store/paymentStore';
 import { formatCurrency } from '../../lib/utils';
 import toast from 'react-hot-toast';
+import { platformSettingsApi } from '../../lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,69 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function num(v: unknown, fallback: number): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function str(v: unknown, fallback: string): string {
+  return typeof v === 'string' ? v : fallback;
+}
+
+function feeConfigFromApi(raw: Record<string, unknown> | null | undefined): FeeConfig {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_FEES };
+  return {
+    inspectionFee: num(raw.inspectionFee, DEFAULT_FEES.inspectionFee),
+    managementFeeMin: num(raw.managementFeeMin, DEFAULT_FEES.managementFeeMin),
+    managementFeeMax: num(raw.managementFeeMax, DEFAULT_FEES.managementFeeMax),
+    managementFeeDefault: num(raw.managementFeeDefault, DEFAULT_FEES.managementFeeDefault),
+    itabPlatformFee: num(raw.itabPlatformFee, DEFAULT_FEES.itabPlatformFee),
+    latePaymentFee: num(raw.latePaymentFee, DEFAULT_FEES.latePaymentFee),
+    payoutThreshold: num(raw.payoutThreshold, DEFAULT_FEES.payoutThreshold),
+    payoutDay: num(raw.payoutDay, DEFAULT_FEES.payoutDay),
+  };
+}
+
+function companyAccountsFromApi(raw: Record<string, unknown> | null | undefined): CompanyAccounts {
+  if (!raw || typeof raw !== 'object') return { ...DEFAULT_ACCOUNTS };
+  return {
+    primaryMethod: (['mtn_momo', 'airtel_money', 'bank'] as const).includes(raw.primaryMethod as PaymentMethodOption)
+      ? (raw.primaryMethod as PaymentMethodOption)
+      : DEFAULT_ACCOUNTS.primaryMethod,
+    primaryMtnPhone: str(raw.primaryMtnPhone, DEFAULT_ACCOUNTS.primaryMtnPhone),
+    primaryAirtelPhone: str(raw.primaryAirtelPhone, DEFAULT_ACCOUNTS.primaryAirtelPhone),
+    primaryBankName: str(raw.primaryBankName, DEFAULT_ACCOUNTS.primaryBankName),
+    primaryAccountNumber: str(raw.primaryAccountNumber, DEFAULT_ACCOUNTS.primaryAccountNumber),
+    primaryAccountName: str(raw.primaryAccountName, DEFAULT_ACCOUNTS.primaryAccountName),
+    secondaryMethod: (['mtn_momo', 'airtel_money', 'bank'] as const).includes(raw.secondaryMethod as PaymentMethodOption)
+      ? (raw.secondaryMethod as PaymentMethodOption)
+      : DEFAULT_ACCOUNTS.secondaryMethod,
+    secondaryMtnPhone: str(raw.secondaryMtnPhone, DEFAULT_ACCOUNTS.secondaryMtnPhone),
+    secondaryAirtelPhone: str(raw.secondaryAirtelPhone, DEFAULT_ACCOUNTS.secondaryAirtelPhone),
+    secondaryBankName: str(raw.secondaryBankName, DEFAULT_ACCOUNTS.secondaryBankName),
+    secondaryAccountNumber: str(raw.secondaryAccountNumber, DEFAULT_ACCOUNTS.secondaryAccountNumber),
+    secondaryAccountName: str(raw.secondaryAccountName, DEFAULT_ACCOUNTS.secondaryAccountName),
+    transferFrequency: (['weekly', 'monthly', 'manual'] as const).includes(raw.transferFrequency as CompanyAccounts['transferFrequency'])
+      ? (raw.transferFrequency as CompanyAccounts['transferFrequency'])
+      : DEFAULT_ACCOUNTS.transferFrequency,
+  };
+}
+
+function isFeeConfigEmpty(api: Record<string, unknown>): boolean {
+  return !api || Object.keys(api).length === 0;
+}
+
+function isCompanyAccountsEffectivelyEmpty(api: Record<string, unknown>): boolean {
+  if (!api || Object.keys(api).length === 0) return true;
+  const a = companyAccountsFromApi(api);
+  return (
+    !a.primaryMtnPhone &&
+    !a.primaryAirtelPhone &&
+    !a.primaryBankName &&
+    !a.primaryAccountNumber
+  );
 }
 
 // ─── Method options ───────────────────────────────────────────────────────────
@@ -165,15 +229,54 @@ function AccountFields({
 
 export function AdminFees() {
   const [activeTab, setActiveTab] = useState<'fees' | 'accounts'>('fees');
-  const [fees, setFees] = useState<FeeConfig>(() => loadFromStorage(STORAGE_KEY_FEES, DEFAULT_FEES));
-  const [companyAccounts, setCompanyAccounts] = useState<CompanyAccounts>(
-    () => loadFromStorage(STORAGE_KEY_ACCOUNTS, DEFAULT_ACCOUNTS)
-  );
+  const [fees, setFees] = useState<FeeConfig>(DEFAULT_FEES);
+  const [companyAccounts, setCompanyAccounts] = useState<CompanyAccounts>(DEFAULT_ACCOUNTS);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const getPlatformRevenue = usePaymentStore(s => s.getPlatformRevenue);
   const platformRevenue = getPlatformRevenue();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await platformSettingsApi.get();
+        const d = res.data.data;
+        let nextFees = feeConfigFromApi(d.feeConfig as Record<string, unknown>);
+        let nextAccounts = companyAccountsFromApi(d.companyAccounts as Record<string, unknown>);
+        const legacyFees = loadFromStorage(STORAGE_KEY_FEES, DEFAULT_FEES);
+        const legacyAccounts = loadFromStorage(STORAGE_KEY_ACCOUNTS, DEFAULT_ACCOUNTS);
+        if (isFeeConfigEmpty(d.feeConfig as Record<string, unknown>) && JSON.stringify(legacyFees) !== JSON.stringify(DEFAULT_FEES)) {
+          nextFees = { ...DEFAULT_FEES, ...legacyFees };
+        }
+        if (isCompanyAccountsEffectivelyEmpty(d.companyAccounts as Record<string, unknown>)) {
+          const hasLegacy =
+            legacyAccounts.primaryMtnPhone ||
+            legacyAccounts.primaryAirtelPhone ||
+            legacyAccounts.primaryBankName ||
+            legacyAccounts.primaryAccountNumber;
+          if (hasLegacy) nextAccounts = { ...DEFAULT_ACCOUNTS, ...legacyAccounts };
+        }
+        if (!cancelled) {
+          setFees(nextFees);
+          setCompanyAccounts(nextAccounts);
+        }
+      } catch {
+        if (!cancelled) {
+          toast.error('Could not load settings from server. Showing cached copy if available.');
+          setFees(loadFromStorage(STORAGE_KEY_FEES, DEFAULT_FEES));
+          setCompanyAccounts(loadFromStorage(STORAGE_KEY_ACCOUNTS, DEFAULT_ACCOUNTS));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -192,42 +295,31 @@ export function AdminFees() {
   async function handleSaveFees() {
     setSaving(true);
     try {
-      // Save to backend via audit log (fees are config, stored as announcement-style)
-      await import('../../lib/api').then(({ api }) =>
-        api.post('/audit-logs', {
-          action: 'fee_config_updated',
-          performedByName: 'Admin',
-          performedByRole: 'admin',
-          description: 'Fee configuration updated',
-          metadata: fees,
-        })
-      );
-    } catch { /* silent — save locally as fallback */ }
-    localStorage.setItem(STORAGE_KEY_FEES, JSON.stringify(fees));
-    setSaving(false);
-    setSaved(true);
-    toast.success('Fee configuration saved');
-    setTimeout(() => setSaved(false), 3000);
+      await platformSettingsApi.put({ feeConfig: fees });
+      localStorage.setItem(STORAGE_KEY_FEES, JSON.stringify(fees));
+      setSaved(true);
+      toast.success('Fee configuration saved to server');
+      setTimeout(() => setSaved(false), 3000);
+    } catch {
+      toast.error('Failed to save fee configuration. Check your connection and permissions.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleSaveAccounts() {
     setSaving(true);
     try {
-      await import('../../lib/api').then(({ api }) =>
-        api.post('/audit-logs', {
-          action: 'fee_config_updated',
-          performedByName: 'Admin',
-          performedByRole: 'admin',
-          description: 'Company accounts updated',
-          metadata: { primaryMethod: companyAccounts.primaryMethod, transferFrequency: companyAccounts.transferFrequency },
-        })
-      );
-    } catch { /* silent */ }
-    localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(companyAccounts));
-    setSaving(false);
-    setSaved(true);
-    toast.success('Company accounts saved');
-    setTimeout(() => setSaved(false), 3000);
+      await platformSettingsApi.put({ companyAccounts });
+      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(companyAccounts));
+      setSaved(true);
+      toast.success('Company accounts saved to server');
+      setTimeout(() => setSaved(false), 3000);
+    } catch {
+      toast.error('Failed to save company accounts. Check your connection and permissions.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   // ── Preview calc ───────────────────────────────────────────────────────────
@@ -249,6 +341,15 @@ export function AdminFees() {
       return next.toLocaleDateString('en-UG', { day: 'numeric', month: 'long', year: 'numeric' });
     }
     return 'On demand';
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6 animate-pulse">
+        <div className="h-8 w-64 bg-slate-200 dark:bg-slate-700 rounded-lg" />
+        <div className="h-40 bg-slate-100 dark:bg-slate-800 rounded-2xl" />
+      </div>
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────

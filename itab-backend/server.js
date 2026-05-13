@@ -2403,6 +2403,87 @@ app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), requ
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// PLATFORM SETTINGS (fees & company accounts — Render DB)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/platform-settings', auth, requireRole('admin'), requirePerm('admin', 'configureFees'), async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT fee_config, company_accounts, updated_at FROM platform_settings WHERE id = $1',
+      ['global']
+    );
+    if (!r.rows.length) {
+      return res.json({ data: { feeConfig: {}, companyAccounts: {}, updatedAt: null } });
+    }
+    const row = r.rows[0];
+    res.json({
+      data: {
+        feeConfig: parseDbJson(row.fee_config, {}) || {},
+        companyAccounts: parseDbJson(row.company_accounts, {}) || {},
+        updatedAt: row.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.put('/api/platform-settings', auth, requireRole('admin'), requirePerm('admin', 'configureFees'), async (req, res) => {
+  try {
+    const { feeConfig, companyAccounts } = req.body;
+    const cur = await pool.query(
+      'SELECT fee_config, company_accounts FROM platform_settings WHERE id = $1',
+      ['global']
+    );
+    const prevF = cur.rows[0] ? parseDbJson(cur.rows[0].fee_config, {}) || {} : {};
+    const prevC = cur.rows[0] ? parseDbJson(cur.rows[0].company_accounts, {}) || {} : {};
+    const mergedF =
+      feeConfig != null && typeof feeConfig === 'object' && !Array.isArray(feeConfig)
+        ? { ...prevF, ...feeConfig }
+        : prevF;
+    const mergedC =
+      companyAccounts != null && typeof companyAccounts === 'object' && !Array.isArray(companyAccounts)
+        ? { ...prevC, ...companyAccounts }
+        : prevC;
+
+    const ins = await pool.query(
+      `INSERT INTO platform_settings (id, fee_config, company_accounts, updated_at)
+       VALUES ('global', $1::jsonb, $2::jsonb, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         fee_config = EXCLUDED.fee_config,
+         company_accounts = EXCLUDED.company_accounts,
+         updated_at = NOW()
+       RETURNING fee_config, company_accounts, updated_at`,
+      [JSON.stringify(mergedF), JSON.stringify(mergedC)]
+    );
+    const row = ins.rows[0];
+    await pool.query(
+      `INSERT INTO audit_logs (id, action, performed_by, performed_by_name, performed_by_role, description, metadata)
+       VALUES ($1,'fee_config_updated',$2,$3,$4,$5,$6)`,
+      [
+        uuidv4(),
+        req.user.id,
+        req.user.name || 'Admin',
+        req.user.role,
+        'Platform fee / company account settings updated in platform_settings',
+        JSON.stringify({ feeKeys: Object.keys(mergedF), accountKeys: Object.keys(mergedC) }),
+      ]
+    ).catch(() => {});
+    res.json({
+      data: {
+        feeConfig: parseDbJson(row.fee_config, {}) || {},
+        companyAccounts: parseDbJson(row.company_accounts, {}) || {},
+        updatedAt: row.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // PAYMENT PREFERENCES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 

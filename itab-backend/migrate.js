@@ -260,6 +260,14 @@ async function main() {
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, 'payment_preferences table');
 
+  await run(`CREATE TABLE IF NOT EXISTS platform_settings (
+    id TEXT PRIMARY KEY,
+    fee_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    company_accounts JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'platform_settings table');
+  await run(`INSERT INTO platform_settings (id, fee_config, company_accounts) VALUES ('global', '{}'::jsonb, '{}'::jsonb) ON CONFLICT (id) DO NOTHING`, 'platform_settings seed');
+
   console.log('📝 Patching agent_applications...');
   await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS national_id_doc TEXT`, 'agent_applications.national_id_doc');
   await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS additional_docs JSONB DEFAULT '[]'::jsonb`, 'agent_applications.additional_docs');

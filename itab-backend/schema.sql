@@ -434,6 +434,14 @@ CREATE TABLE IF NOT EXISTS payment_preferences (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Global fee & company payout configuration (single row, Render DB source of truth)
+CREATE TABLE IF NOT EXISTS platform_settings (
+  id                 TEXT PRIMARY KEY,
+  fee_config           JSONB NOT NULL DEFAULT '{}',
+  company_accounts     JSONB NOT NULL DEFAULT '{}',
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_properties_status ON properties(status);
 CREATE INDEX IF NOT EXISTS idx_properties_district ON properties(district);
