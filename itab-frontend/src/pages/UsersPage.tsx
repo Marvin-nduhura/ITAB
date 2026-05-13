@@ -774,14 +774,14 @@ export function UsersPage() {
                       onChange={(key: string, val: boolean) => {
                         setEditPermissions(prev => ({
                           ...prev,
-                          [section]: { ...getPermissionSectionRow(section, prev), [key]: val } as FullUserPermissions[typeof section],
+                          [section]: { ...getPermissionSectionRow(section, prev), [key]: val } as unknown as FullUserPermissions[typeof section],
                         }));
                       }}
                       onToggleAll={(val: boolean) => {
                         const next = Object.fromEntries(keys.map(k => [k, val])) as Record<string, boolean>;
                         setEditPermissions(prev => ({
                           ...prev,
-                          [section]: next as FullUserPermissions[typeof section],
+                          [section]: next as unknown as FullUserPermissions[typeof section],
                         }));
                       }}
                     />

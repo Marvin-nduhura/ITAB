@@ -222,7 +222,7 @@ export function resolvePermissions(
 
   const out = merged as unknown as FullUserPermissions;
   (Object.keys(base) as (keyof FullUserPermissions)[]).forEach((section) => {
-    const b = base[section] as Record<string, boolean>;
+    const b = base[section] as unknown as Record<string, boolean>;
     const m = out[section] as unknown as Record<string, boolean>;
     if (!b || !m) return;
     Object.keys(b).forEach((k) => {
