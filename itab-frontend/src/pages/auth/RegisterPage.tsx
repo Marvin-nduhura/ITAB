@@ -83,6 +83,7 @@ export function RegisterPage() {
   const {
     register: registerApp,
     handleSubmit: handleAppSubmit,
+    setValue: setAppValue,
     formState: { errors: appErrors },
   } = useForm<ApplicationData>({ resolver: zodResolver(applicationSchema) });
 
@@ -476,9 +477,13 @@ export function RegisterPage() {
                       <button
                         key={d}
                         type="button"
-                        onClick={() => setAppDistricts(prev =>
-                          prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]
-                        )}
+                        onClick={() => {
+                          const next = appDistricts.includes(d)
+                            ? appDistricts.filter(x => x !== d)
+                            : [...appDistricts, d];
+                          setAppDistricts(next);
+                          setAppValue('districts', next, { shouldValidate: true });
+                        }}
                         className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium transition-all ${
                           appDistricts.includes(d)
                             ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
@@ -493,7 +498,11 @@ export function RegisterPage() {
                   {appErrors.districts && (
                     <p className="mt-1 text-xs text-red-500">{appErrors.districts.message}</p>
                   )}
-                  <input type="hidden" {...registerApp('districts')} value={appDistricts} />
+                  {appDistricts.length > 0 && (
+                    <p className="mt-1 text-xs text-green-600 dark:text-green-400">
+                      ✓ {appDistricts.length} district{appDistricts.length > 1 ? 's' : ''} selected: {appDistricts.join(', ')}
+                    </p>
+                  )}
                 </div>
                 <Textarea
                   label={
