@@ -6,6 +6,7 @@ import { Input, Select } from '../../components/ui/Input';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { useUserStore, type AuditAction } from '../../store/userStore';
+import { useDataStore } from '../../store/dataStore';
 import { timeAgo, formatDate } from '../../lib/utils';
 import { downloadCSV } from '../../lib/download';
 
@@ -33,7 +34,10 @@ const actionConfig: Record<AuditAction, { label: string; color: string }> = {
 };
 
 export function AuditLogsPage() {
-  const { auditLogs } = useUserStore();
+  const { auditLogs: localLogs } = useUserStore();
+  const { auditLogs: backendLogs } = useDataStore();
+  // Backend logs are the source of truth; fall back to local if not yet synced
+  const auditLogs = (backendLogs.length > 0 ? backendLogs : localLogs) as typeof localLogs;
   const [search, setSearch] = useState('');
   const [filterAction, setFilterAction] = useState('');
 

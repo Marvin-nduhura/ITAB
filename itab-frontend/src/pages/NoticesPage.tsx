@@ -11,7 +11,10 @@ import { Input, Select, Textarea } from '../components/ui/Input';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Avatar } from '../components/ui/Avatar';
 import { useAuthStore } from '../store/authStore';
+import { useUserStore } from '../store/userStore';
 import { useDataStore } from '../store/dataStore';
+import { noticesApi } from '../lib/api';
+import { apiSend } from '../lib/apiCall';
 import { formatDate, timeAgo } from '../lib/utils';
 import type { TenantNotice, NoticeType } from '../types';
 import toast from 'react-hot-toast';
@@ -176,14 +179,19 @@ interface ComposeModalProps {
   onSend: (notice: Omit<TenantNotice, 'id' | 'status' | 'createdAt'>) => void;
 }
 
-const mockTenants = [
-  { id: 'u4', name: 'Grace Apio', property: '1-Bedroom Apartment in Entebbe' },
-  { id: 'u7', name: 'James Okello', property: '3-Bedroom Apartment in Kololo' },
-];
 
 function ComposeModal({ open, onClose, onSend }: ComposeModalProps) {
   const { user } = useAuthStore();
-  const [tenantId, setTenantId] = useState('u4');
+  const { users } = useUserStore();
+  const tenants = users.filter(u => u.role === 'tenant').map(u => ({
+    id: u.id,
+    name: `${u.firstName} ${u.lastName}`,
+    property: 'Property',
+  }));
+  const effectiveTenants = tenants.length > 0 ? tenants : [
+    { id: 'u4', name: 'Grace Apio', property: '1-Bedroom Apartment in Entebbe' },
+  ];
+  const [tenantId, setTenantId] = useState(effectiveTenants[0]?.id || 'u4');
   const [noticeType, setNoticeType] = useState<NoticeType>('general');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
@@ -192,7 +200,7 @@ function ComposeModal({ open, onClose, onSend }: ComposeModalProps) {
   const [requiresAck, setRequiresAck] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const selectedTenant = mockTenants.find(t => t.id === tenantId) || mockTenants[0];
+  const selectedTenant = effectiveTenants.find(t => t.id === tenantId) || effectiveTenants[0];
 
   const handleSend = async () => {
     if (!subject.trim() || !body.trim()) {
@@ -252,7 +260,7 @@ function ComposeModal({ open, onClose, onSend }: ComposeModalProps) {
           label="Send to Tenant"
           value={tenantId}
           onChange={e => setTenantId(e.target.value)}
-          options={mockTenants.map(t => ({ value: t.id, label: `${t.name} — ${t.property}` }))}
+          options={effectiveTenants.map(t => ({ value: t.id, label: `${t.name} — ${t.property}` }))}
         />
 
         {/* Notice type */}
@@ -646,22 +654,20 @@ export function NoticesPage() {
   // ── Tenant handlers ──────────────────────────────────────────────────────
   const handleMarkRead = (id: string) => {
     setNotices(prev =>
-      prev.map(n =>
-        n.id === id && n.status === 'unread'
-          ? { ...n, status: 'read', readAt: new Date().toISOString() }
-          : n
+      prev.map(n => n.id === id && n.status === 'unread'
+        ? { ...n, status: 'read', readAt: new Date().toISOString() } : n
       )
     );
+    apiSend(() => noticesApi.markRead(id));
   };
 
   const handleAcknowledge = (id: string) => {
     setNotices(prev =>
-      prev.map(n =>
-        n.id === id
-          ? { ...n, status: 'acknowledged', acknowledgedAt: new Date().toISOString() }
-          : n
+      prev.map(n => n.id === id
+        ? { ...n, status: 'acknowledged', acknowledgedAt: new Date().toISOString() } : n
       )
     );
+    apiSend(() => noticesApi.acknowledge(id));
     toast.success('Notice acknowledged');
   };
 
@@ -672,25 +678,28 @@ export function NoticesPage() {
 
   const handleSubmitDispute = (noticeId: string, response: string) => {
     setNotices(prev =>
-      prev.map(n =>
-        n.id === noticeId
-          ? { ...n, status: 'disputed', tenantResponse: response }
-          : n
+      prev.map(n => n.id === noticeId
+        ? { ...n, status: 'disputed', tenantResponse: response } : n
       )
     );
     toast.success('Dispute submitted. The manager will review your response.');
   };
 
   // ── Manager handlers ─────────────────────────────────────────────────────
-  const handleSendNotice = (notice: Omit<TenantNotice, 'id' | 'status' | 'createdAt'>) => {
-    const newNotice: TenantNotice = {
-      ...notice,
-      id: `tn${Date.now()}`,
-      status: 'unread',
-      createdAt: new Date().toISOString(),
-    };
-    setSentNotices(prev => [newNotice, ...prev]);
-    toast.success(`Notice sent to ${notice.tenantName}`);
+  const handleSendNotice = async (notice: Omit<TenantNotice, 'id' | 'status' | 'createdAt'>) => {
+    try {
+      const res = await noticesApi.send(notice);
+      const saved = (res.data as { data: TenantNotice }).data;
+      setSentNotices(prev => [saved, ...prev]);
+      toast.success(`Notice sent to ${notice.tenantName}`);
+    } catch {
+      // Offline — add locally
+      const newNotice: TenantNotice = {
+        ...notice, id: `tn${Date.now()}`, status: 'unread', createdAt: new Date().toISOString(),
+      };
+      setSentNotices(prev => [newNotice, ...prev]);
+      toast.success(`Notice saved (will sync when online)`);
+    }
   };
 
   // ── Filtered notices (tenant) ────────────────────────────────────────────

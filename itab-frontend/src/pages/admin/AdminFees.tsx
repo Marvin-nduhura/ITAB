@@ -191,7 +191,18 @@ export function AdminFees() {
 
   async function handleSaveFees() {
     setSaving(true);
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      // Save to backend via audit log (fees are config, stored as announcement-style)
+      await import('../../lib/api').then(({ api }) =>
+        api.post('/audit-logs', {
+          action: 'fee_config_updated',
+          performedByName: 'Admin',
+          performedByRole: 'admin',
+          description: 'Fee configuration updated',
+          metadata: fees,
+        })
+      );
+    } catch { /* silent — save locally as fallback */ }
     localStorage.setItem(STORAGE_KEY_FEES, JSON.stringify(fees));
     setSaving(false);
     setSaved(true);
@@ -201,7 +212,17 @@ export function AdminFees() {
 
   async function handleSaveAccounts() {
     setSaving(true);
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      await import('../../lib/api').then(({ api }) =>
+        api.post('/audit-logs', {
+          action: 'fee_config_updated',
+          performedByName: 'Admin',
+          performedByRole: 'admin',
+          description: 'Company accounts updated',
+          metadata: { primaryMethod: companyAccounts.primaryMethod, transferFrequency: companyAccounts.transferFrequency },
+        })
+      );
+    } catch { /* silent */ }
     localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(companyAccounts));
     setSaving(false);
     setSaved(true);

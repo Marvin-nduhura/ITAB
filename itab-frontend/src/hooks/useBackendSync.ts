@@ -20,6 +20,9 @@ import { useUIStore } from '../store/uiStore';
 import { useDataStore } from '../store/dataStore';
 import { useVendorStore } from '../store/vendorStore';
 import { useUserStore } from '../store/userStore';
+import { usePaymentStore } from '../store/paymentStore';
+import { useDocumentStore } from '../store/documentStore';
+import { useDisputeStore } from '../store/disputeStore';
 import {
   syncApi,
   usersApi,
@@ -54,6 +57,9 @@ export function useBackendSync() {
   const { isOnline } = useUIStore();
   const { setVendors, setJobs: setVendorJobsStore } = useVendorStore();
   const { setUsers } = useUserStore();
+  const { setTransactions: setPaymentStoreTxs, setContracts } = usePaymentStore();
+  const { setDocuments: setDocumentStoreDocs } = useDocumentStore();
+  const { setDisputes: setDisputeStoreDis } = useDisputeStore();
   const {
     setInspections,
     setPayments,
@@ -94,14 +100,18 @@ export function useBackendSync() {
       if (data.properties)    setProperties(asArray<Property>(data.properties));
       if (data.inspections)   setInspections(asArray<Inspection>(data.inspections));
       if (data.payments)      setPayments(asArray<Payment>(data.payments));
-      if (data.transactions)  setTransactions(asArray<PlatformTransaction>(data.transactions));
+      if (data.transactions)  {
+        const txs = asArray<PlatformTransaction>(data.transactions);
+        setTransactions(txs);
+        setPaymentStoreTxs(txs); // also populate paymentStore
+      }
       if (data.maintenance)   setMaintenance(asArray<MaintenanceRequest>(data.maintenance));
       if (data.payouts)       setPayouts(asArray<Payout>(data.payouts));
       if (data.vendors)       setVendors(asArray<Vendor>(data.vendors));
       if (data.vendorJobs)    { setVendorJobs(asArray<VendorJob>(data.vendorJobs)); setVendorJobsStore(asArray<VendorJob>(data.vendorJobs)); }
-      if (data.documents)     setDocuments(asArray<Document>(data.documents));
+      if (data.documents)     { setDocuments(asArray<Document>(data.documents)); setDocumentStoreDocs(asArray<Document>(data.documents)); }
       if (data.notices)       setNotices(asArray<TenantNotice>(data.notices));
-      if (data.disputes)      setDisputes(asArray<Dispute>(data.disputes));
+      if (data.disputes)      { setDisputes(asArray<Dispute>(data.disputes)); setDisputeStoreDis(asArray<Dispute>(data.disputes)); }
       if (data.announcements) setAnnouncements(asArray<unknown>(data.announcements));
       if (data.notifications) setNotifications(asArray<Notification>(data.notifications));
 
@@ -160,6 +170,7 @@ export function useBackendSync() {
     setNotices, setDisputes, setAnnouncements, setNotifications,
     setConversations, setMessages, setAuditLogs, setAgentApplications,
     setVendors, setVendorJobsStore, setUsers,
+    setPaymentStoreTxs, setContracts, setDocumentStoreDocs, setDisputeStoreDis,
   ]);
 
   // ── On mount: sync immediately ─────────────────────────────────────────────

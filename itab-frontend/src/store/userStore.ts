@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { User, UserRole } from '../types';
 import type { FullUserPermissions } from '../types/permissions';
 import { generateId } from '../lib/utils';
+import { usersApi, auditLogsApi } from '../lib/api';
+import { apiSend } from '../lib/apiCall';
 
 // ─── Default permissions per role — now in lib/defaultPermissions.ts ─────────
 export { DEFAULT_PERMISSIONS as DEFAULT_ROLE_PERMISSIONS } from '../lib/defaultPermissions';
@@ -103,6 +105,8 @@ export const useUserStore = create<UserStore>()(
               : u
           ),
         }));
+        // Persist to Render DB
+        apiSend(() => usersApi.suspend(id, reason));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -126,6 +130,7 @@ export const useUserStore = create<UserStore>()(
               : u
           ),
         }));
+        apiSend(() => usersApi.suspend(id, `[BANNED] ${reason}`));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -149,6 +154,7 @@ export const useUserStore = create<UserStore>()(
               : u
           ),
         }));
+        apiSend(() => usersApi.unsuspend(id));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -169,6 +175,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, kycStatus: 'approved', isVerified: true } : u
           ),
         }));
+        apiSend(() => usersApi.approve(id));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -189,6 +196,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, kycStatus: 'rejected' } : u
           ),
         }));
+        apiSend(() => usersApi.rejectApproval(id, 'KYC rejected'));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -231,6 +239,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, permissions, updatedAt: new Date().toISOString() } : u
           ),
         }));
+        apiSend(() => usersApi.setPermissions(id, permissions));
       },
 
       updateUserDistricts: (id, districts) => {
@@ -239,6 +248,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, restrictedDistricts: districts, updatedAt: new Date().toISOString() } : u
           ),
         }));
+        apiSend(() => usersApi.setDistricts(id, districts));
       },
 
       changeUserRole: (id, role) => {
@@ -247,6 +257,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, role, updatedAt: new Date().toISOString() } : u
           ),
         }));
+        apiSend(() => usersApi.changeRole(id, role));
       },
 
       getPendingApprovals: () => {
@@ -261,6 +272,7 @@ export const useUserStore = create<UserStore>()(
               : u
           ),
         }));
+        apiSend(() => usersApi.approve(id));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -283,6 +295,7 @@ export const useUserStore = create<UserStore>()(
               : u
           ),
         }));
+        apiSend(() => usersApi.rejectApproval(id, reason));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -305,6 +318,16 @@ export const useUserStore = create<UserStore>()(
           createdAt: new Date().toISOString(),
         };
         set(s => ({ auditLogs: [entry, ...s.auditLogs] }));
+        // Persist to Render DB
+        apiSend(() => auditLogsApi.log({
+          action: log.action,
+          performedByName: log.performedByName,
+          performedByRole: log.performedByRole,
+          targetId: log.targetId,
+          targetName: log.targetName,
+          description: log.description,
+          metadata: log.metadata,
+        }));
       },
 
       submitAgentApplication: (app) => {

@@ -1,16 +1,18 @@
 import { create } from 'zustand';
 import type { Notification } from '../types';
+import { notificationsApi } from '../lib/api';
+import { apiSend } from '../lib/apiCall';
 
 interface NotificationStore {
   notifications: Notification[];
   unreadCount: number;
   addNotification: (n: Notification) => void;
-  markRead: (id: string) => void;
-  markAllRead: () => void;
-  setNotifications: (ns: Notification[]) => void;
+  markRead:        (id: string) => void;
+  markAllRead:     () => void;
+  setNotifications:(ns: Notification[]) => void;
 }
 
-export const useNotificationStore = create<NotificationStore>((set) => ({
+export const useNotificationStore = create<NotificationStore>((set, get) => ({
   notifications: [],
   unreadCount: 0,
 
@@ -22,10 +24,14 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
   },
 
   markRead: (id) => {
+    const n = get().notifications.find(x => x.id === id);
+    if (!n || n.isRead) return;
     set(s => ({
-      notifications: s.notifications.map(n => n.id === id ? { ...n, isRead: true } : n),
+      notifications: s.notifications.map(x => x.id === id ? { ...x, isRead: true } : x),
       unreadCount: Math.max(0, s.unreadCount - 1),
     }));
+    // Sync to backend (fire-and-forget)
+    apiSend(() => notificationsApi.markRead(id));
   },
 
   markAllRead: () => {
@@ -33,6 +39,7 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
       notifications: s.notifications.map(n => ({ ...n, isRead: true })),
       unreadCount: 0,
     }));
+    apiSend(() => notificationsApi.markAllRead());
   },
 
   setNotifications: (ns) => {

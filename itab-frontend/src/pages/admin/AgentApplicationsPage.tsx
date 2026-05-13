@@ -9,6 +9,8 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { useUserStore, type AgentApplication } from '../../store/userStore';
 import { useAuthStore } from '../../store/authStore';
+import { useDataStore } from '../../store/dataStore';
+import { agentApplicationsApi } from '../../lib/api';
 import { timeAgo, formatDate, roleLabels } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
@@ -103,45 +105,48 @@ function DocThumb({ dataUrl, name, label, onClick }: { dataUrl?: string; name: s
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function AgentApplicationsPage() {
   const { agentApplications, approveAgentApplication, rejectAgentApplication } = useUserStore();
+  const { agentApplications: backendApps } = useDataStore();
   const { user } = useAuthStore();
+  // Use backend apps if available (synced from Render), fall back to store
+  const allApps = (backendApps.length > 0 ? backendApps : agentApplications) as AgentApplication[];
   const [selected, setSelected] = useState<AgentApplication | null>(null);
   const [adminNote, setAdminNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'pending' | 'approved' | 'rejected' | ''>('');
   const [viewingDoc, setViewingDoc] = useState<{ dataUrl: string; name: string } | null>(null);
 
-  const filtered = agentApplications.filter(a => !filterStatus || a.status === filterStatus);
-  const pendingCount = agentApplications.filter(a => a.status === 'pending').length;
+  const filtered = allApps.filter(a => !filterStatus || a.status === filterStatus);
+  const pendingCount = allApps.filter(a => a.status === 'pending').length;
 
   const handleApprove = async () => {
     if (!adminNote.trim()) { toast.error('Add a note before approving'); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      await agentApplicationsApi.approve(selected!.id, adminNote);
+    } catch { /* offline */ }
     approveAgentApplication(selected!.id, adminNote, {
-      id: user!.id,
-      name: `${user!.firstName} ${user!.lastName}`,
-      role: user!.role,
+      id: user!.id, name: `${user!.firstName} ${user!.lastName}`, role: user!.role,
     });
     setLoading(false);
-    setSelected(null);
-    setAdminNote('');
     const roleLabel = roleLabels[selected!.role as keyof typeof roleLabels] || selected!.role || 'applicant';
     toast.success(`Application approved! ${selected!.firstName} can now operate as a ${roleLabel}.`);
+    setSelected(null);
+    setAdminNote('');
   };
 
   const handleReject = async () => {
     if (!adminNote.trim()) { toast.error('Provide a reason for rejection'); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      await agentApplicationsApi.reject(selected!.id, adminNote);
+    } catch { /* offline */ }
     rejectAgentApplication(selected!.id, adminNote, {
-      id: user!.id,
-      name: `${user!.firstName} ${user!.lastName}`,
-      role: user!.role,
+      id: user!.id, name: `${user!.firstName} ${user!.lastName}`, role: user!.role,
     });
     setLoading(false);
+    toast(`Application rejected. Applicant will be notified.`, { icon: '❌' });
     setSelected(null);
     setAdminNote('');
-    toast(`Application rejected. Applicant will be notified.`, { icon: '❌' });
   };
 
   return (

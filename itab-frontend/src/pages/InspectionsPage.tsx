@@ -11,6 +11,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { QRCodeDisplay } from '../components/ui/QRCodeDisplay';
 import { useAuthStore } from '../store/authStore';
 import { useDataStore } from '../store/dataStore';
+import { inspectionsApi } from '../lib/api';
 import { formatCurrency, formatDate, inspectionStatusConfig, INSPECTION_FEE } from '../lib/utils';
 import { downloadReceipt } from '../lib/download';
 import { filterInspectionsForUser } from '../lib/rbac';
@@ -135,20 +136,23 @@ export function InspectionsPage() {
     return <Clock size={16} className="text-yellow-500" />;
   };
 
-  const handleConfirm = (id: string) => {
+  const handleConfirm = async (id: string) => {
     setInspections(prev => prev.map(i => i.id === id ? { ...i, status: 'confirmed' as const } : i));
+    try { await inspectionsApi.confirm(id); } catch { /* queued offline */ }
     toast.success('Inspection confirmed! Tenant has been notified.');
   };
 
-  const handleCancel = (id: string) => {
+  const handleCancel = async (id: string) => {
     setInspections(prev => prev.map(i => i.id === id ? { ...i, status: 'cancelled' as const } : i));
+    try { await inspectionsApi.cancel(id); } catch { /* queued offline */ }
     toast('Inspection cancelled. Fee is non-refundable.', { icon: '⚠️' });
   };
 
-  const handleNoShow = (id: string) => {
+  const handleNoShow = async (id: string) => {
     setInspections(prev => prev.map(i =>
       i.id === id ? { ...i, status: 'no_show' as const, noShowCount: i.noShowCount + 1 } : i
     ));
+    try { await inspectionsApi.noShow(id); } catch { /* queued offline */ }
     toast.error('Tenant marked as no-show. Property remains available.');
   };
 
@@ -344,8 +348,9 @@ export function InspectionsPage() {
                   {user?.role === 'property_manager' && insp.status === 'confirmed' && (
                     <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex gap-2">
                       <Button size="sm" icon={<CheckCircle2 size={13} />}
-                        onClick={() => {
+                        onClick={async () => {
                           setInspections(prev => prev.map(i => i.id === insp.id ? { ...i, status: 'completed' as const } : i));
+                          try { await inspectionsApi.confirm(insp.id); } catch { /* offline */ }
                           toast.success('Inspection marked as completed.');
                         }}>
                         Mark Completed

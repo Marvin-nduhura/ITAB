@@ -29,7 +29,6 @@ export function VettingQueue() {
   const quickReject = (id: string) => {
     updateProperty(id, { status: 'rejected' });
   };
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">

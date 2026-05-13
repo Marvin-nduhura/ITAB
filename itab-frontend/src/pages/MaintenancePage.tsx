@@ -11,6 +11,7 @@ import { FileUpload, type UploadedFile } from '../components/ui/FileUpload';
 import { useAuthStore } from '../store/authStore';
 import { useVendorStore } from '../store/vendorStore';
 import { useDataStore } from '../store/dataStore';
+import { maintenanceApi } from '../lib/api';
 import { formatDate, formatCurrency, maintenanceStatusConfig } from '../lib/utils';
 import { filterMaintenanceForUser, canDo } from '../lib/rbac';
 import type { MaintenanceRequest, VendorCategory } from '../types';
@@ -72,23 +73,35 @@ export function MaintenancePage() {
   const handleSubmitRequest = async () => {
     if (!form.title || !form.description) { toast.error('Please fill all fields'); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    const newReq: MaintenanceRequest = {
-      id: `m_${Date.now()}`,
-      propertyId: 'p6', propertyTitle: '1-Bedroom Apartment in Entebbe',
-      tenantId: user?.id || '',
-      tenantName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim(),
-      title: form.title, description: form.description,
-      priority: form.priority as MaintenanceRequest['priority'],
-      status: 'submitted', photos: photos.map(p => p.dataUrl),
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    };
-    setRequests(prev => [newReq, ...prev]);
-    setLoading(false);
-    setShowNewModal(false);
-    setForm({ title: '', description: '', priority: 'normal' });
-    setPhotos([]);
-    toast.success('Maintenance request submitted!');
+    try {
+      const res = await maintenanceApi.create({
+        propertyId: 'p6', propertyTitle: '1-Bedroom Apartment in Entebbe',
+        title: form.title, description: form.description,
+        priority: form.priority, photos: photos.map(p => p.dataUrl),
+      });
+      const saved = (res.data as { data: MaintenanceRequest }).data;
+      setRequests(prev => [saved, ...prev]);
+      toast.success('Maintenance request submitted!');
+    } catch {
+      // Offline — add locally
+      const newReq: MaintenanceRequest = {
+        id: `m_${Date.now()}`,
+        propertyId: 'p6', propertyTitle: '1-Bedroom Apartment in Entebbe',
+        tenantId: user?.id || '',
+        tenantName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim(),
+        title: form.title, description: form.description,
+        priority: form.priority as MaintenanceRequest['priority'],
+        status: 'submitted', photos: photos.map(p => p.dataUrl),
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      setRequests(prev => [newReq, ...prev]);
+      toast.success('Maintenance request saved (will sync when online)');
+    } finally {
+      setLoading(false);
+      setShowNewModal(false);
+      setForm({ title: '', description: '', priority: 'normal' });
+      setPhotos([]);
+    }
   };
 
   const handleAssign = async () => {
@@ -96,32 +109,37 @@ export function MaintenancePage() {
     const vendor = vendors.find(v => v.id === selectedVendorId);
     if (!vendor) return;
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    assignJob({
-      vendorId: vendor.id,
-      vendorName: `${vendor.firstName} ${vendor.lastName}`,
-      maintenanceRequestId: showAssignModal.id,
-      propertyTitle: showAssignModal.propertyTitle,
-      propertyAddress: '',
-      title: showAssignModal.title,
-      description: showAssignModal.description,
-      status: 'assigned',
-      scheduledDate: assignDate || undefined,
-      estimatedCost: estimatedCost ? Number(estimatedCost) : undefined,
-      managerNotes: assignNotes || undefined,
-      photos: [],
-    });
-    setRequests(prev => prev.map(r => r.id === showAssignModal.id
-      ? { ...r, status: 'assigned', vendorId: vendor.id, vendorName: `${vendor.firstName} ${vendor.lastName}`, estimatedCost: estimatedCost ? Number(estimatedCost) : undefined }
-      : r
-    ));
-    setLoading(false);
-    setShowAssignModal(null);
-    setSelectedVendorId('');
-    setAssignNotes('');
-    setAssignDate('');
-    setEstimatedCost('');
-    toast.success(`Assigned to ${vendor.firstName} ${vendor.lastName}!`);
+    try {
+      await maintenanceApi.assign(showAssignModal.id, vendor.id);
+      assignJob({
+        vendorId: vendor.id,
+        vendorName: `${vendor.firstName} ${vendor.lastName}`,
+        maintenanceRequestId: showAssignModal.id,
+        propertyTitle: showAssignModal.propertyTitle,
+        propertyAddress: '',
+        title: showAssignModal.title,
+        description: showAssignModal.description,
+        status: 'assigned',
+        scheduledDate: assignDate || undefined,
+        estimatedCost: estimatedCost ? Number(estimatedCost) : undefined,
+        managerNotes: assignNotes || undefined,
+        photos: [],
+      });
+      setRequests(prev => prev.map(r => r.id === showAssignModal.id
+        ? { ...r, status: 'assigned', vendorId: vendor.id, vendorName: `${vendor.firstName} ${vendor.lastName}`, estimatedCost: estimatedCost ? Number(estimatedCost) : undefined }
+        : r
+      ));
+      toast.success(`Assigned to ${vendor.firstName} ${vendor.lastName}!`);
+    } catch {
+      toast.error('Failed to assign vendor');
+    } finally {
+      setLoading(false);
+      setShowAssignModal(null);
+      setSelectedVendorId('');
+      setAssignNotes('');
+      setAssignDate('');
+      setEstimatedCost('');
+    }
   };
 
   const handleComplete = async () => {

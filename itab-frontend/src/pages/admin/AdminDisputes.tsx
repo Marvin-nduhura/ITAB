@@ -10,6 +10,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { useDisputeStore } from '../../store/disputeStore';
 import { useAuthStore } from '../../store/authStore';
 import { useUserStore } from '../../store/userStore';
+import { useDataStore } from '../../store/dataStore';
 import { formatDate, timeAgo, formatCurrency } from '../../lib/utils';
 import toast from 'react-hot-toast';
 import type { Dispute, DisputeStatus } from '../../types';
@@ -32,12 +33,15 @@ export function AdminDisputes() {
   const { disputes, updateDisputeStatus } = useDisputeStore();
   const { user } = useAuthStore();
   const { addAuditLog } = useUserStore();
+  const { disputes: backendDisputes } = useDataStore();
+  // Use backend disputes if available, fall back to store
+  const allDisputes = backendDisputes.length > 0 ? backendDisputes as typeof disputes : disputes;
   const [selected, setSelected] = useState<Dispute | null>(null);
   const [resolution, setResolution] = useState('');
   const [filterStatus, setFilterStatus] = useState<DisputeStatus | ''>('');
 
-  const filtered = disputes.filter(d => !filterStatus || d.status === filterStatus);
-  const openCount = disputes.filter(d => d.status === 'open').length;
+  const filtered = allDisputes.filter(d => !filterStatus || d.status === filterStatus);
+  const openCount = allDisputes.filter(d => d.status === 'open').length;
 
   const handleUpdate = (status: DisputeStatus) => {
     if ((status === 'resolved') && !resolution.trim()) {
