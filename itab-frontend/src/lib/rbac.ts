@@ -5,7 +5,7 @@
  */
 import type { User, UserRole, Property, Payment, MaintenanceRequest, Inspection, Payout } from '../types';
 import type { FullUserPermissions } from '../types/permissions';
-import { resolvePermissions } from './defaultPermissions';
+import { resolvePermissions, getPendingVerificationPermissions, parseStoredPermissions } from './defaultPermissions';
 
 // ─── Role constants ───────────────────────────────────────────────────────────
 export const ROLES = {
@@ -28,11 +28,30 @@ export function isTenant(user: User | null)  { return is(user, ROLES.TENANT); }
 export function isAgent(user: User | null)   { return is(user, ROLES.AGENT); }
 export function isVendor(user: User | null)  { return is(user, ROLES.VENDOR); }
 
+const VETTING_ROLES: UserRole[] = ['landlord', 'agent', 'property_manager'];
+
+/**
+ * True when the user must not use the platform as their full role yet.
+ * - Landlord / agent / property_manager: restricted until approval_status is exactly `approved`
+ *   (covers pending, rejected, or missing status from older rows).
+ * - Any other role: restricted only if explicitly `pending`.
+ * Admin is never restricted.
+ */
+export function isAwaitingApproval(user: User | null): boolean {
+  if (!user || user.role === 'admin') return false;
+  const s = user.approvalStatus;
+  if (VETTING_ROLES.includes(user.role)) {
+    return s !== 'approved';
+  }
+  return s === 'pending';
+}
+
 // ─── Effective permissions ────────────────────────────────────────────────────
 /** Merge role defaults with any individual overrides the admin has set. */
 export function getPermissions(user: User | null): FullUserPermissions {
   if (!user) return resolvePermissions('guest');
-  return resolvePermissions(user.role, user.permissions);
+  if (isAwaitingApproval(user)) return getPendingVerificationPermissions();
+  return resolvePermissions(user.role, parseStoredPermissions(user.permissions));
 }
 
 /** Check a single permission. Usage: perm(user, 'properties', 'addProperty') */
@@ -58,6 +77,12 @@ export function filterPropertiesForUser(properties: Property[], user: User | nul
   if (!user) {
     // Unauthenticated visitors: only published
     return properties.filter(p => p.status === 'published');
+  }
+
+  if (isAwaitingApproval(user)) {
+    return properties.filter(p =>
+      p.status === 'published' || p.status === 'rented' || p.status === 'under_maintenance'
+    );
   }
 
   // Admin sees everything
@@ -99,6 +124,7 @@ export function filterPropertiesForUser(properties: Property[], user: User | nul
 
 export function filterPaymentsForUser(payments: Payment[], user: User | null): Payment[] {
   if (!user) return [];
+  if (isAwaitingApproval(user)) return [];
   switch (user.role) {
     case 'admin':            return payments;
     case 'property_manager': return payments.filter(p => p.propertyId && true);
@@ -110,6 +136,7 @@ export function filterPaymentsForUser(payments: Payment[], user: User | null): P
 
 export function filterMaintenanceForUser(requests: MaintenanceRequest[], user: User | null): MaintenanceRequest[] {
   if (!user) return [];
+  if (isAwaitingApproval(user)) return [];
   switch (user.role) {
     case 'admin':            return requests;
     case 'property_manager': return requests;
@@ -122,6 +149,7 @@ export function filterMaintenanceForUser(requests: MaintenanceRequest[], user: U
 
 export function filterInspectionsForUser(inspections: Inspection[], user: User | null): Inspection[] {
   if (!user) return [];
+  if (isAwaitingApproval(user)) return [];
   switch (user.role) {
     case 'admin':            return inspections;
     case 'property_manager': return inspections.filter(i => i.managerId === user.id);
@@ -133,6 +161,7 @@ export function filterInspectionsForUser(inspections: Inspection[], user: User |
 
 export function filterPayoutsForUser(payouts: Payout[], user: User | null): Payout[] {
   if (!user) return [];
+  if (isAwaitingApproval(user)) return [];
   switch (user.role) {
     case 'admin':            return payouts;
     case 'property_manager': return payouts;
@@ -263,6 +292,19 @@ export const routeRoles: Record<string, UserRole[]> = {
   '/notifications':       ['admin', 'property_manager', 'landlord', 'tenant', 'agent', 'vendor'],
 };
 
+/** Pathnames allowed while account is pending admin approval (matches canAccessRoute keys + subpaths). */
+export function canAccessPathnameWhilePending(pathname: string): boolean {
+  return [
+    /^\/dashboard$/,
+    /^\/search$/,
+    /^\/properties(\/.*)?$/,
+    /^\/messages$/,
+    /^\/documents$/,
+    /^\/notifications$/,
+    /^\/settings(\/.*)?$/,
+  ].some(re => re.test(pathname));
+}
+
 /**
  * Check if a user can access a route — checks both role AND individual permissions.
  * Admin can grant a user access to routes their role normally can't reach,
@@ -270,6 +312,20 @@ export const routeRoles: Record<string, UserRole[]> = {
  */
 export function canAccessRoute(user: User | null, path: string): boolean {
   if (!user) return false;
+
+  if (isAwaitingApproval(user)) {
+    const pendingRoutes = new Set([
+      '/dashboard',
+      '/search',
+      '/properties',
+      '/messages',
+      '/documents',
+      '/notifications',
+      '/settings',
+    ]);
+    return pendingRoutes.has(path);
+  }
+
   const allowed = routeRoles[path];
   if (!allowed) return true;
   if (!allowed.includes(user.role)) return false;

@@ -94,7 +94,7 @@ export function UsersPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [editNotes, setEditNotes] = useState('');
   const [editRole, setEditRole] = useState<UserRole>('tenant');
-  const [editPermissions, setEditPermissions] = useState<FullUserPermissions>(() => DEFAULT_PERMISSIONS['tenant']);
+  const [editPermissions, setEditPermissions] = useState<FullUserPermissions>(() => resolvePermissions('tenant'));
   const [editDistricts, setEditDistricts] = useState<string[]>([]);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectModal, setShowRejectModal] = useState(false);
@@ -182,7 +182,7 @@ export function UsersPage() {
     setDetailTab('profile');
     setEditNotes(u.notes || '');
     setEditRole(u.role);
-    setEditPermissions(u.permissions || resolvePermissions(u.role));
+    setEditPermissions(resolvePermissions(u.role, u.permissions));
     setEditDistricts(u.restrictedDistricts || []);
     setEditKycStatus(u.kycStatus);
     setEditApprovalStatus(u.approvalStatus || 'approved');
@@ -192,12 +192,20 @@ export function UsersPage() {
     if (!detailUser) return;
     setDetailLoading(true);
     try {
-      await usersApi.setPermissions(detailUser.id, editPermissions);
-    } catch { /* backend unavailable */ }
-    updateUserPermissions(detailUser.id, editPermissions);
-    setDetailUser(prev => prev ? { ...prev, permissions: editPermissions } : null);
-    toast.success('Permissions updated');
-    setDetailLoading(false);
+      const res = await usersApi.setPermissions(detailUser.id, editPermissions);
+      const updated = (res.data as { data?: User })?.data;
+      const savedPerms = updated?.permissions ?? editPermissions;
+      updateUserPermissions(detailUser.id, savedPerms as FullUserPermissions);
+      setDetailUser(prev => prev ? { ...prev, permissions: savedPerms as User['permissions'] } : null);
+      setEditPermissions(resolvePermissions(detailUser.role, savedPerms));
+      toast.success('Permissions updated');
+    } catch {
+      updateUserPermissions(detailUser.id, editPermissions);
+      setDetailUser(prev => prev ? { ...prev, permissions: editPermissions } : null);
+      toast.success('Permissions saved locally (sync when online)');
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   const handleSaveDistricts = async () => {
@@ -743,7 +751,7 @@ export function UsersPage() {
                 {(Object.keys(PERMISSION_SECTIONS) as (keyof FullUserPermissions)[]).map(section => {
                   const sectionInfo = PERMISSION_SECTIONS[section];
                   const sectionPerms = editPermissions[section] as unknown as Record<string, boolean> | undefined;
-                  const sectionLabels = PERMISSION_LABELS[section] as Record<string, string> | undefined;
+                  const sectionLabels = (PERMISSION_LABELS as Record<string, Record<string, string>>)[section as string];
                   if (!sectionPerms || !sectionLabels) return null;
                   const keys = Object.keys(sectionPerms);
                   const enabledCount = keys.filter(k => sectionPerms[k]).length;

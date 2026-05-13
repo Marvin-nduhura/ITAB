@@ -1,5 +1,10 @@
 import type { FullUserPermissions } from '../types/permissions';
 
+/** Deep clone so we never mutate shared DEFAULT_PERMISSIONS objects. */
+function clonePermissions(p: FullUserPermissions): FullUserPermissions {
+  return JSON.parse(JSON.stringify(p)) as FullUserPermissions;
+}
+
 // ─── Helper: all false ────────────────────────────────────────────────────────
 function none(): FullUserPermissions {
   return {
@@ -133,19 +138,85 @@ export const DEFAULT_PERMISSIONS: Record<string, FullUserPermissions> = {
  * Merge role defaults with any individual overrides stored on the user.
  * Individual overrides take precedence over role defaults.
  */
+/** Normalize permissions from API (JSON string, object, or null). */
+export function parseStoredPermissions(raw: unknown): Partial<FullUserPermissions> | undefined {
+  if (raw == null || raw === '') return undefined;
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw) as unknown;
+      if (typeof p === 'object' && p !== null && !Array.isArray(p)) return p as Partial<FullUserPermissions>;
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Partial<FullUserPermissions>;
+  return undefined;
+}
+
+/**
+ * Landlord / agent / property_manager while approval_status is pending:
+ * browse listings read-only, use Messages + Documents only (for admin verification).
+ * No profile edits, payments, inspections, notices, etc.
+ */
+export function getPendingVerificationPermissions(): FullUserPermissions {
+  const p = none();
+  // Read-only listing browse (like a tenant viewing the market)
+  p.properties = {
+    ...p.properties,
+    viewProperties: true,
+    viewPropertyDetails: true,
+    viewPropertyMap: true,
+    shareProperty: true,
+    addToFavorites: true,
+  };
+  p.messages = {
+    viewMessages: true,
+    sendMessage: true,
+    deleteMessage: false,
+    searchConversations: true,
+  };
+  p.documents = {
+    ...p.documents,
+    viewOwnDocuments: true,
+    uploadDocument: true,
+    downloadDocument: true,
+  };
+  // Optional: read notices only (no send / acknowledge) — verification is via messages + documents
+  p.notices = {
+    ...p.notices,
+    viewNotices: true,
+    sendNotice: false,
+    acknowledgeNotice: false,
+    disputeNotice: false,
+    deleteNotice: false,
+  };
+  // Theme only — no profile / password / payment edits until approved
+  p.settings = {
+    ...p.settings,
+    editProfile: false,
+    changePassword: false,
+    setPaymentMethod: false,
+    manageNotificationPreferences: false,
+    changeTheme: true,
+  };
+  return p;
+}
+
 export function resolvePermissions(
   role: string,
-  overrides?: Partial<FullUserPermissions>
+  overrides?: Partial<FullUserPermissions> | string | null
 ): FullUserPermissions {
-  const base = DEFAULT_PERMISSIONS[role] ?? none();
-  if (!overrides) return base;
+  const base = clonePermissions(DEFAULT_PERMISSIONS[role] ?? none());
+  const ov = parseStoredPermissions(overrides ?? undefined);
+  if (!ov) return base;
 
   const merged = { ...base } as unknown as Record<string, Record<string, boolean>>;
-  const ov = overrides as unknown as Record<string, Record<string, boolean>>;
+  const ovRec = ov as unknown as Record<string, Record<string, boolean>>;
 
-  Object.keys(ov).forEach(section => {
-    if (merged[section] && ov[section]) {
-      merged[section] = { ...merged[section], ...ov[section] };
+  Object.keys(ovRec).forEach(section => {
+    if (merged[section] && ovRec[section] && typeof ovRec[section] === 'object') {
+      merged[section] = { ...merged[section], ...ovRec[section] };
     }
   });
 

@@ -42,6 +42,46 @@ app.use(cors({
 app.use(express.json({ limit: '20mb' }));
 app.use(morgan('dev'));
 
+// Block mutating API calls until admin approves the account (except messages, document upload, self-delete).
+// Landlord / agent / property_manager: not approved = only browse + messages + documents (matches frontend RBAC).
+const VETTING_ROLES_DB = ['landlord', 'agent', 'property_manager'];
+app.use(async (req, res, next) => {
+  if (!req.path.startsWith('/api')) return next();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return next();
+  let uid;
+  try {
+    uid = jwt.verify(token, JWT_SECRET).id;
+  } catch {
+    return next();
+  }
+  const allow =
+    req.path.startsWith('/api/messages')
+    || (req.method === 'POST' && req.path === '/api/documents')
+    || (req.method === 'DELETE' && req.path === '/api/auth/account');
+  if (allow) return next();
+  try {
+    const r = await pool.query(
+      'SELECT approval_status, role FROM users WHERE id = $1',
+      [uid]
+    );
+    if (!r.rows.length) return next();
+    const { approval_status, role } = r.rows[0];
+    const notApprovedVetting =
+      VETTING_ROLES_DB.includes(role) && approval_status !== 'approved';
+    const pendingOther = approval_status === 'pending' && role !== 'admin';
+    if (!notApprovedVetting && !pendingOther) return next();
+    return res.status(403).json({
+      message:
+        'Your account is not approved for full access yet. You can browse listings, use Messages, and upload Documents for verification. Profile and other changes unlock after admin approval.',
+      code: 'ACCOUNT_PENDING_APPROVAL',
+    });
+  } catch {
+    return next();
+  }
+});
+
 // ─── Auth middleware ──────────────────────────────────────────────────────────
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
@@ -63,9 +103,28 @@ function requireRole(...roles) {
   };
 }
 
+function parseDbJson(val, fallback = null) {
+  if (val == null || val === '') return fallback;
+  if (typeof val === 'object' && val !== null && !Array.isArray(val)) return val;
+  if (typeof val === 'string') {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
 // ─── Format helpers ───────────────────────────────────────────────────────────
 function formatUser(u) {
   if (!u) return null;
+  const permissionsRaw = parseDbJson(u.permissions, null);
+  const permissions =
+    permissionsRaw && typeof permissionsRaw === 'object' && !Array.isArray(permissionsRaw)
+      ? permissionsRaw
+      : null;
+  const rd = parseDbJson(u.restricted_districts, []);
   return {
     id: u.id,
     email: u.email,
@@ -79,8 +138,8 @@ function formatUser(u) {
     suspendedReason: u.suspended_reason,
     suspendedAt: u.suspended_at,
     kycStatus: u.kyc_status,
-    permissions: u.permissions,
-    restrictedDistricts: u.restricted_districts,
+    permissions,
+    restrictedDistricts: Array.isArray(rd) ? rd : [],
     approvalStatus: u.approval_status,
     googleId: u.google_id,
     notes: u.notes,

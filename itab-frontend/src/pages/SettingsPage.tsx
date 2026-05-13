@@ -12,6 +12,7 @@ import { usePWAInstall } from '../hooks/usePWAInstall';
 import { FileUpload, type UploadedFile } from '../components/ui/FileUpload';
 import { PaymentPreferences } from '../components/payment/PaymentPreferences';
 import toast from 'react-hot-toast';
+import { isAwaitingApproval } from '../lib/rbac';
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -29,7 +30,13 @@ export function SettingsPage() {
     phone: user?.phone || '',
   });
 
+  const profileLocked = user ? isAwaitingApproval(user) : false;
+
   const handleSave = async () => {
+    if (profileLocked) {
+      toast.error('Profile cannot be edited until your account is approved by an admin.');
+      return;
+    }
     setLoading(true);
     try {
       await authApi.updateProfile(form);
@@ -88,6 +95,11 @@ export function SettingsPage() {
         {tab === 'profile' && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-6 space-y-5">
             <h2 className="font-bold text-slate-900 dark:text-slate-100">Profile Information</h2>
+            {profileLocked && (
+              <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-sm text-amber-800 dark:text-amber-200">
+                Your account is under admin review. You can use Messages and Documents until you are approved; profile changes are disabled.
+              </div>
+            )}
             {/* Avatar */}
             <div className="flex items-center gap-4">
               <div className="w-20 h-20 bg-primary-100 dark:bg-primary-900/30 rounded-2xl flex items-center justify-center text-primary-600 text-2xl font-bold overflow-hidden">
@@ -102,20 +114,24 @@ export function SettingsPage() {
                   maxFiles={1}
                   maxSizeMB={5}
                   value={avatarFiles}
-                  onChange={files => { setAvatarFiles(files); if (files[0]) updateUser({ avatar: files[0].dataUrl }); }}
+                  onChange={files => {
+                    if (profileLocked) return;
+                    setAvatarFiles(files);
+                    if (files[0]) updateUser({ avatar: files[0].dataUrl });
+                  }}
                   showCamera
                   showPreview={false}
                   compact
-                  hint="JPG, PNG up to 5MB · Take a selfie or upload from gallery"
+                  hint={profileLocked ? 'Unavailable until your account is approved' : 'JPG, PNG up to 5MB · Take a selfie or upload from gallery'}
                 />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Input label="First Name" value={form.firstName} onChange={e => setForm(f => ({ ...f, firstName: e.target.value }))} />
-              <Input label="Last Name" value={form.lastName} onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} />
+              <Input label="First Name" value={form.firstName} disabled={profileLocked} onChange={e => setForm(f => ({ ...f, firstName: e.target.value }))} />
+              <Input label="Last Name" value={form.lastName} disabled={profileLocked} onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} />
             </div>
-            <Input label="Email Address" type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
-            <Input label="Phone Number" type="tel" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+            <Input label="Email Address" type="email" value={form.email} disabled={profileLocked} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+            <Input label="Phone Number" type="tel" value={form.phone} disabled={profileLocked} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
             <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50">
               <div className={`w-2.5 h-2.5 rounded-full ${user?.kycStatus === 'approved' ? 'bg-green-500' : 'bg-yellow-500'}`} />
               <div>
@@ -123,13 +139,18 @@ export function SettingsPage() {
                 <p className="text-xs text-slate-400">Identity verification status</p>
               </div>
             </div>
-            <Button loading={loading} onClick={handleSave} icon={<Save size={15} />}>Save Changes</Button>
+            <Button loading={loading} onClick={handleSave} icon={<Save size={15} />} disabled={profileLocked}>Save Changes</Button>
           </div>
         )}
 
         {tab === 'notifications' && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-6 space-y-4">
             <h2 className="font-bold text-slate-900 dark:text-slate-100">Notification Preferences</h2>
+            {profileLocked && (
+              <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                Preferences cannot be changed until your account is approved.
+              </p>
+            )}
             {[
               { label: 'Rent reminders', desc: 'Get notified before rent is due', defaultOn: true },
               { label: 'Inspection updates', desc: 'Confirmation and reminders for inspections', defaultOn: true },
@@ -143,8 +164,8 @@ export function SettingsPage() {
                   <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{n.label}</p>
                   <p className="text-xs text-slate-400">{n.desc}</p>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" defaultChecked={n.defaultOn} className="sr-only peer" onChange={() => toast.success('Preference saved')} />
+                <label className={`relative inline-flex items-center ${profileLocked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+                  <input type="checkbox" defaultChecked={n.defaultOn} disabled={profileLocked} className="sr-only peer" onChange={() => { if (!profileLocked) toast.success('Preference saved'); }} />
                   <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
                 </label>
               </div>
@@ -155,11 +176,16 @@ export function SettingsPage() {
         {tab === 'security' && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-6 space-y-5">
             <h2 className="font-bold text-slate-900 dark:text-slate-100">Security</h2>
+            {profileLocked && (
+              <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+                Password and security options are locked until your account is approved. You can still delete your account below if you need to leave the platform.
+              </p>
+            )}
             <div className="space-y-4">
-              <Input label="Current Password" type="password" placeholder="••••••••" />
-              <Input label="New Password" type="password" placeholder="Min. 8 characters" />
-              <Input label="Confirm New Password" type="password" placeholder="Repeat new password" />
-              <Button onClick={() => toast.success('Password updated!')}>Update Password</Button>
+              <Input label="Current Password" type="password" placeholder="••••••••" disabled={profileLocked} />
+              <Input label="New Password" type="password" placeholder="Min. 8 characters" disabled={profileLocked} />
+              <Input label="Confirm New Password" type="password" placeholder="Repeat new password" disabled={profileLocked} />
+              <Button onClick={() => { if (profileLocked) { toast.error('Unavailable until approved'); return; } toast.success('Password updated!'); }} disabled={profileLocked}>Update Password</Button>
             </div>
             <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
               <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-3">Two-Factor Authentication</h3>
@@ -168,7 +194,7 @@ export function SettingsPage() {
                   <p className="text-sm font-medium text-slate-900 dark:text-slate-100">SMS Authentication</p>
                   <p className="text-xs text-slate-400">Receive a code via SMS when signing in</p>
                 </div>
-                <Button size="sm" variant="secondary" onClick={() => toast.success('2FA enabled!')}>Enable</Button>
+                <Button size="sm" variant="secondary" disabled={profileLocked} onClick={() => { if (profileLocked) return; toast.success('2FA enabled!'); }}>Enable</Button>
               </div>
             </div>
             <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
@@ -208,13 +234,21 @@ export function SettingsPage() {
 
         {tab === 'payments' && (
           <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-6">
-            <h2 className="font-bold text-slate-900 dark:text-slate-100 mb-1">Payment Method</h2>
-            <p className="text-sm text-slate-500 mb-5">Set how you want to receive payments from ITAB. This applies to rent payouts, vendor payments, and any money sent to you.</p>
-            <PaymentPreferences
-              userId={user?.id || ''}
-              userType={user?.role === 'vendor' ? 'vendor' : 'user'}
-              label="How do you want to receive money?"
-            />
+            {profileLocked ? (
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                Payment preferences are available after an admin approves your account.
+              </p>
+            ) : (
+              <>
+                <h2 className="font-bold text-slate-900 dark:text-slate-100 mb-1">Payment Method</h2>
+                <p className="text-sm text-slate-500 mb-5">Set how you want to receive payments from ITAB. This applies to rent payouts, vendor payments, and any money sent to you.</p>
+                <PaymentPreferences
+                  userId={user?.id || ''}
+                  userType={user?.role === 'vendor' ? 'vendor' : 'user'}
+                  label="How do you want to receive money?"
+                />
+              </>
+            )}
           </div>
         )}
 
