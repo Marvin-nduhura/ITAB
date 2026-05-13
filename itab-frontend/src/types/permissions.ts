@@ -178,6 +178,8 @@ export interface AdminPermissions {
   viewAgentApplications: boolean;
   approveAgentApplication: boolean;
   rejectAgentApplication: boolean;
+  exportAuditLogs: boolean;
+  manageApiKeys: boolean;
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
@@ -367,6 +369,8 @@ export const PERMISSION_LABELS: Record<string, Record<string, string>> = {
     viewAgentApplications:    'View agent/landlord applications',
     approveAgentApplication:  'Approve agent/landlord application',
     rejectAgentApplication:   'Reject agent/landlord application',
+    exportAuditLogs:          'Export audit logs (CSV / compliance)',
+    manageApiKeys:            'Manage API keys & integrations',
   },
   settings: {
     editProfile:                    'Edit own profile',
@@ -403,3 +407,24 @@ export const PERMISSION_SECTIONS: Record<keyof FullUserPermissions, { label: str
   settings:       { label: 'Settings',          icon: '🔩' },
   disputes:       { label: 'Disputes',          icon: '⚖️' },
 };
+
+/** Section order for the admin “Permissions” tab (same keys as FullUserPermissions / PERMISSION_LABELS). */
+export const PERMISSION_EDITOR_SECTIONS = Object.keys(PERMISSION_SECTIONS) as (keyof FullUserPermissions)[];
+
+/**
+ * Build the boolean map for one section using PERMISSION_LABELS as the key source of truth.
+ * Ensures every documented permission appears in the admin UI even if stored JSON is partial or outdated.
+ */
+export function getPermissionSectionRow(
+  section: keyof FullUserPermissions,
+  full: FullUserPermissions,
+): Record<string, boolean> {
+  const spec = PERMISSION_LABELS[section as string] as Record<string, string> | undefined;
+  const current = full[section] as unknown as Record<string, boolean> | undefined;
+  const row: Record<string, boolean> = {};
+  if (!spec) return { ...(current || {}) };
+  for (const key of Object.keys(spec)) {
+    row[key] = typeof current?.[key] === 'boolean' ? current[key] : false;
+  }
+  return row;
+}

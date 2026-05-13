@@ -11,8 +11,8 @@ import { useAuthStore } from '../store/authStore';
 import { roleLabels, formatDate, generateId, DISTRICTS } from '../lib/utils';
 import { isAdmin } from '../lib/rbac';
 import { usersApi } from '../lib/api';
-import { DEFAULT_PERMISSIONS, resolvePermissions } from '../lib/defaultPermissions';
-import { PERMISSION_LABELS, PERMISSION_SECTIONS } from '../types/permissions';
+import { resolvePermissions } from '../lib/defaultPermissions';
+import { PERMISSION_LABELS, PERMISSION_SECTIONS, PERMISSION_EDITOR_SECTIONS, getPermissionSectionRow } from '../types/permissions';
 import type { FullUserPermissions } from '../types/permissions';
 import toast from 'react-hot-toast';
 import type { User, UserRole } from '../types';
@@ -54,11 +54,13 @@ function PermissionSection({
           </button>
         </div>
       </div>
-      {/* Permission rows */}
-      <div className="divide-y divide-slate-100 dark:divide-slate-700/50">
-        {Object.entries(perms).map(([key, val]) => (
+      {/* Permission rows — iterate label keys so every defined permission appears */}
+      <div className="divide-y divide-slate-100 dark:divide-slate-700/50 max-h-[min(55vh,480px)] overflow-y-auto">
+        {Object.keys(labels).map((key) => {
+          const val = !!perms[key];
+          return (
           <div key={key} className="flex items-center justify-between px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-            <p className="text-sm text-slate-700 dark:text-slate-300">{labels[key] || key}</p>
+            <p className="text-sm text-slate-700 dark:text-slate-300 pr-3">{labels[key] || key}</p>
             <button
               type="button"
               onClick={() => onChange(key, !val)}
@@ -69,7 +71,8 @@ function PermissionSection({
               <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${val ? 'translate-x-4' : 'translate-x-0.5'}`} />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -621,7 +624,7 @@ export function UsersPage() {
         open={!!detailUser}
         onClose={() => setDetailUser(null)}
         title={detailUser ? `${detailUser.firstName} ${detailUser.lastName}` : ''}
-        size="lg"
+        size="xl"
         footer={<Button variant="secondary" onClick={() => setDetailUser(null)}>Close</Button>}
       >
         {detailUser && (
@@ -738,23 +741,25 @@ export function UsersPage() {
 
             {detailTab === 'permissions' && (
               <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Toggle individual permissions. Overrides role defaults for this user only.
-                  </p>
-                  <Button size="sm" variant="secondary" icon={<RotateCcw size={12} />} onClick={handleResetPermissions}>
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Fine-grained access</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                      Every permission from the platform matrix is listed below. Toggle on or off for this user, or reset to their role defaults and click “Save All Permissions” to persist.
+                    </p>
+                  </div>
+                  <Button size="sm" variant="secondary" icon={<RotateCcw size={12} />} className="shrink-0" onClick={handleResetPermissions}>
                     Reset to defaults
                   </Button>
                 </div>
 
-                {/* Sections */}
-                {(Object.keys(PERMISSION_SECTIONS) as (keyof FullUserPermissions)[]).map(section => {
+                {PERMISSION_EDITOR_SECTIONS.map(section => {
                   const sectionInfo = PERMISSION_SECTIONS[section];
-                  const sectionPerms = editPermissions[section] as unknown as Record<string, boolean> | undefined;
-                  const sectionLabels = (PERMISSION_LABELS as Record<string, Record<string, string>>)[section as string];
-                  if (!sectionPerms || !sectionLabels) return null;
-                  const keys = Object.keys(sectionPerms);
-                  const enabledCount = keys.filter(k => sectionPerms[k]).length;
+                  const sectionLabels = PERMISSION_LABELS[section as string] as Record<string, string> | undefined;
+                  if (!sectionLabels) return null;
+                  const row = getPermissionSectionRow(section, editPermissions);
+                  const keys = Object.keys(sectionLabels);
+                  const enabledCount = keys.filter(k => row[k]).length;
 
                   return (
                     <PermissionSection
@@ -762,19 +767,22 @@ export function UsersPage() {
                       section={section}
                       label={sectionInfo.label}
                       icon={sectionInfo.icon}
-                      perms={sectionPerms}
+                      perms={row}
                       labels={sectionLabels}
                       enabledCount={enabledCount}
                       total={keys.length}
                       onChange={(key: string, val: boolean) => {
                         setEditPermissions(prev => ({
                           ...prev,
-                          [section]: { ...(prev[section] as unknown as Record<string, boolean>), [key]: val },
+                          [section]: { ...getPermissionSectionRow(section, prev), [key]: val } as FullUserPermissions[typeof section],
                         }));
                       }}
                       onToggleAll={(val: boolean) => {
-                        const updated = Object.fromEntries(keys.map(k => [k, val]));
-                        setEditPermissions(prev => ({ ...prev, [section]: updated }));
+                        const next = Object.fromEntries(keys.map(k => [k, val])) as Record<string, boolean>;
+                        setEditPermissions(prev => ({
+                          ...prev,
+                          [section]: next as FullUserPermissions[typeof section],
+                        }));
                       }}
                     />
                   );

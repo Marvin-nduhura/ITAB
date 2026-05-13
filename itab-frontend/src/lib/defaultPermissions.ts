@@ -21,7 +21,7 @@ function none(): FullUserPermissions {
     transactions:   { viewOwnTransactions: false, viewAllTransactions: false, retryFailedTransaction: false, refundTransaction: false, exportTransactionsCSV: false },
     userManagement: { viewUsers: false, inviteUser: false, suspendUser: false, banUser: false, unsuspendUser: false, changeUserRole: false, editUserPermissions: false, setDistrictRestrictions: false, approveUserApplication: false, rejectUserApplication: false, approveKYC: false, rejectKYC: false, addAdminNotes: false },
     analytics:      { viewBasicAnalytics: false, viewPlatformRevenue: false, viewTransactionVolume: false, viewUserStats: false, viewDisputeStats: false, viewTopProperties: false },
-    admin:          { viewVettingQueue: false, approveProperty: false, rejectProperty: false, viewUnassignedProperties: false, configureFees: false, configureCompanyAccounts: false, viewDisputes: false, resolveDispute: false, dismissDispute: false, sendAnnouncement: false, viewAuditLogs: false, viewAgentApplications: false, approveAgentApplication: false, rejectAgentApplication: false },
+    admin:          { viewVettingQueue: false, approveProperty: false, rejectProperty: false, viewUnassignedProperties: false, configureFees: false, configureCompanyAccounts: false, viewDisputes: false, resolveDispute: false, dismissDispute: false, sendAnnouncement: false, viewAuditLogs: false, viewAgentApplications: false, approveAgentApplication: false, rejectAgentApplication: false, exportAuditLogs: false, manageApiKeys: false },
     settings:       { editProfile: false, changePassword: false, setPaymentMethod: false, manageNotificationPreferences: false, changeTheme: false },
     disputes:       { raiseDispute: false, viewOwnDisputes: false, viewAllDisputes: false, resolveDispute: false, dismissDispute: false },
   };
@@ -52,7 +52,7 @@ function managerPerms(): FullUserPermissions {
   p.transactions = { viewOwnTransactions: true, viewAllTransactions: false, retryFailedTransaction: false, refundTransaction: false, exportTransactionsCSV: true };
   p.userManagement = { viewUsers: false, inviteUser: false, suspendUser: false, banUser: false, unsuspendUser: false, changeUserRole: false, editUserPermissions: false, setDistrictRestrictions: false, approveUserApplication: false, rejectUserApplication: false, approveKYC: false, rejectKYC: false, addAdminNotes: false };
   p.analytics = { viewBasicAnalytics: true, viewPlatformRevenue: false, viewTransactionVolume: false, viewUserStats: false, viewDisputeStats: false, viewTopProperties: true };
-  p.admin = { viewVettingQueue: true, approveProperty: true, rejectProperty: true, viewUnassignedProperties: false, configureFees: false, configureCompanyAccounts: false, viewDisputes: false, resolveDispute: false, dismissDispute: false, sendAnnouncement: false, viewAuditLogs: false, viewAgentApplications: false, approveAgentApplication: false, rejectAgentApplication: false };
+  p.admin = { viewVettingQueue: true, approveProperty: true, rejectProperty: true, viewUnassignedProperties: false, configureFees: false, configureCompanyAccounts: false, viewDisputes: false, resolveDispute: false, dismissDispute: false, sendAnnouncement: false, viewAuditLogs: false, viewAgentApplications: false, approveAgentApplication: false, rejectAgentApplication: false, exportAuditLogs: false, manageApiKeys: false };
   p.settings = { editProfile: true, changePassword: true, setPaymentMethod: true, manageNotificationPreferences: true, changeTheme: true };
   p.disputes = { raiseDispute: true, viewOwnDisputes: true, viewAllDisputes: false, resolveDispute: false, dismissDispute: false };
   return p;
@@ -220,5 +220,15 @@ export function resolvePermissions(
     }
   });
 
-  return merged as unknown as FullUserPermissions;
+  const out = merged as unknown as FullUserPermissions;
+  (Object.keys(base) as (keyof FullUserPermissions)[]).forEach((section) => {
+    const b = base[section] as Record<string, boolean>;
+    const m = out[section] as unknown as Record<string, boolean>;
+    if (!b || !m) return;
+    Object.keys(b).forEach((k) => {
+      if (!(k in m) || typeof m[k] !== 'boolean') m[k] = b[k];
+    });
+  });
+
+  return out;
 }

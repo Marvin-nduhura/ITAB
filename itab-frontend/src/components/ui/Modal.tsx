@@ -28,7 +28,7 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
+  const sizes = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-5xl' };
 
   return (
     <AnimatePresence>
@@ -59,7 +59,7 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
                 </button>
               </div>
             )}
-            <div className="p-6 overflow-y-auto flex-1">{children}</div>
+            <div className="p-6 overflow-y-auto flex-1 min-h-0">{children}</div>
             {footer && (
               <div className="flex items-center justify-end gap-3 p-6 border-t border-slate-100 dark:border-slate-700 flex-shrink-0">
                 {footer}
