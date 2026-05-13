@@ -5,6 +5,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { useAuthStore } from '../store/authStore';
 import { useUIStore, applyTheme } from '../store/uiStore';
+import { authApi } from '../lib/api';
 import { InstallButton } from '../components/pwa/InstallPrompt';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { FileUpload, type UploadedFile } from '../components/ui/FileUpload';
@@ -27,10 +28,17 @@ export function SettingsPage() {
 
   const handleSave = async () => {
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    updateUser(form);
-    setLoading(false);
-    toast.success('Profile updated!');
+    try {
+      await authApi.updateProfile(form);
+      updateUser(form);
+      toast.success('Profile updated!');
+    } catch {
+      // Offline — update locally
+      updateUser(form);
+      toast.success('Profile saved (will sync when online)');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const tabs = [

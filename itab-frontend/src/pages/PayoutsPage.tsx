@@ -25,9 +25,19 @@ export function PayoutsPage() {
 
   const handleProcess = async (id: string) => {
     setLoading(id);
-    await new Promise(r => setTimeout(r, 1500));
-    setLoading(null);
-    toast.success('Payout processed successfully!');
+    try {
+      const { payoutsApi } = await import('../lib/api');
+      if (myPayouts.find(p => p.id === id)?.status === 'failed') {
+        await payoutsApi.retry(id);
+      } else {
+        await payoutsApi.process(id);
+      }
+      toast.success('Payout processed successfully!');
+    } catch {
+      toast.error('Failed to process payout. Please try again.');
+    } finally {
+      setLoading(null);
+    }
   };
 
   const statusVariant = (s: string): 'green' | 'yellow' | 'red' | 'blue' => {

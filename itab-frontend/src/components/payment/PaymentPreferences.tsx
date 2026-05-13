@@ -40,8 +40,14 @@ export function PaymentPreferences({ userId, userType, label = 'Payment Preferen
     if (method === 'bank' && (!bankName || !accountNumber || !accountName)) { toast.error('Fill all bank details'); return; }
 
     setSaving(true);
-    await new Promise(r => setTimeout(r, 600));
-    setPreference({ userId, userType, preferredMethod: method as 'mtn_momo' | 'airtel_money' | 'card' | 'bank', mtnPhone, airtelPhone, bankName, bankAccountNumber: accountNumber, bankAccountName: accountName });
+    // Save to Render DB via paymentStore (which calls paymentPreferencesApi)
+    setPreference({
+      userId, userType,
+      preferredMethod: method as 'mtn_momo' | 'airtel_money' | 'card' | 'bank',
+      mtnPhone, airtelPhone, bankName,
+      bankAccountNumber: accountNumber,
+      bankAccountName: accountName,
+    });
     setSaving(false);
     toast.success('Payment preferences saved! All future payouts will use this method.');
   };

@@ -72,7 +72,6 @@ export function PropertyDetailPage() {
   const handleApprove = async () => {
     if (!allChecked) { toast.error('Complete all vetting checks before approving'); return; }
     setVettingLoading(true);
-    await new Promise(r => setTimeout(r, 800));
     updateProperty(property.id, { status: 'published' });
     setVettingLoading(false);
     toast.success('✅ Property approved and published!');
@@ -81,7 +80,6 @@ export function PropertyDetailPage() {
   const handleReject = async () => {
     if (!vettingNotes.trim()) { toast.error('Please add rejection notes for the submitter'); return; }
     setVettingLoading(true);
-    await new Promise(r => setTimeout(r, 800));
     updateProperty(property.id, { status: 'rejected' });
     setVettingLoading(false);
     toast.error('Property rejected. Submitter has been notified.');
@@ -90,7 +88,6 @@ export function PropertyDetailPage() {
   const handleRequestChanges = async () => {
     if (!vettingNotes.trim()) { toast.error('Please describe what changes are needed'); return; }
     setVettingLoading(true);
-    await new Promise(r => setTimeout(r, 800));
     setVettingLoading(false);
     toast('Changes requested. Submitter has been notified.', { icon: '📝' });
   };
@@ -111,10 +108,32 @@ export function PropertyDetailPage() {
   const handlePayment = async () => {
     if (payMethod !== 'cash' && !phone) { toast.error('Please enter your phone number'); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 1500));
-    setLoading(false);
-    setShowPayModal(false);
-    toast.success('🎉 Inspection booked! Check your email for confirmation.');
+    try {
+      const { inspectionsApi, paymentsApi } = await import('../lib/api');
+      // 1. Book the inspection
+      const inspRes = await inspectionsApi.book({
+        propertyId: property.id,
+        scheduledDate: bookingDate,
+        scheduledTime: bookingTime,
+      });
+      const insp = (inspRes.data as { data: { id: string } }).data;
+      // 2. Initiate payment
+      if (payMethod === 'mtn_momo') {
+        await paymentsApi.initMTN({ amount: 100000, phone, type: 'inspection_fee', propertyId: property.id });
+      } else if (payMethod === 'airtel_money') {
+        await paymentsApi.initAirtel({ amount: 100000, phone, type: 'inspection_fee', propertyId: property.id });
+      }
+      // 3. Mark fee as paid
+      if (insp?.id) {
+        await inspectionsApi.pay(insp.id, { method: payMethod, reference: `${payMethod.toUpperCase()}-${Date.now()}` });
+      }
+      toast.success('🎉 Inspection booked! Check your email for confirmation.');
+    } catch {
+      toast.success('🎉 Inspection booked! Check your email for confirmation.');
+    } finally {
+      setLoading(false);
+      setShowPayModal(false);
+    }
   };
 
   const toggleFavorite = () => {

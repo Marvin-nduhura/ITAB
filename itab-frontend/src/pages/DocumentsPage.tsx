@@ -76,8 +76,7 @@ export function DocumentsPage() {
     if (!uploadName.trim()) { toast.error('Please enter a document name'); return; }
     if (uploadFiles.length === 0) { toast.error('Please select a file to upload'); return; }
     setUploading(true);
-    await new Promise(r => setTimeout(r, 1200));
-    addDocument({
+    await addDocument({
       ownerId:   user?.id || '',
       ownerName: `${user?.firstName} ${user?.lastName}`,
       ownerRole: user?.role || '',
@@ -98,8 +97,7 @@ export function DocumentsPage() {
   const handleApprove = async () => {
     if (!reviewDoc) return;
     setReviewLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    approveDocument(reviewDoc.id, `${user?.firstName} ${user?.lastName}`, approveNotes || undefined);
+    await approveDocument(reviewDoc.id, `${user?.firstName} ${user?.lastName}`, approveNotes || undefined);
     // If it is a KYC doc, also update the user's KYC status
     if (reviewDoc.category === 'kyc') {
       approveKYC(reviewDoc.ownerId);
@@ -115,8 +113,7 @@ export function DocumentsPage() {
     if (!reviewDoc) return;
     if (!rejectNotes.trim()) { toast.error('Please provide a reason for rejection'); return; }
     setReviewLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    rejectDocument(reviewDoc.id, `${user?.firstName} ${user?.lastName}`, rejectNotes.trim());
+    await rejectDocument(reviewDoc.id, `${user?.firstName} ${user?.lastName}`, rejectNotes.trim());
     if (reviewDoc.category === 'kyc') {
       rejectKYC(reviewDoc.ownerId);
     }

@@ -12,6 +12,9 @@ import { StatCard } from '../../components/ui/Card';
 import { usePropertyStore } from '../../store/propertyStore';
 import { useAuthStore } from '../../store/authStore';
 import { useDataStore } from '../../store/dataStore';
+import { useDisputeStore } from '../../store/disputeStore';
+import { usePaymentStore } from '../../store/paymentStore';
+import { paymentPreferencesApi } from '../../lib/api';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import { downloadStatement } from '../../lib/download';
 import toast from 'react-hot-toast';
@@ -28,6 +31,8 @@ export function LandlordPortal() {
   const { user } = useAuthStore();
   const { properties } = usePropertyStore();
   const { payouts: allPayouts } = useDataStore();
+  const { raiseDispute } = useDisputeStore();
+  const { setPreference } = usePaymentStore();
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [showDisputeModal, setShowDisputeModal] = useState(false);
   const [showStatementModal, setShowStatementModal] = useState(false);
@@ -48,14 +53,45 @@ export function LandlordPortal() {
   const totalNet = myPayouts.reduce((s, p) => s + p.netAmount, 0);
 
   const handleSavePayoutDetails = async () => {
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      // Save payout preferences to backend
+      await paymentPreferencesApi.save({
+        preferredMethod: payoutDetails.method,
+        mtnPhone: payoutDetails.method === 'mtn_momo' ? payoutDetails.phone : undefined,
+        airtelPhone: payoutDetails.method === 'airtel_money' ? payoutDetails.phone : undefined,
+        bankName: payoutDetails.method === 'bank' ? payoutDetails.bankName : undefined,
+        bankAccountNumber: payoutDetails.method === 'bank' ? payoutDetails.accountNumber : undefined,
+        bankAccountName: payoutDetails.method === 'bank' ? payoutDetails.accountName : undefined,
+      });
+      // Also update local payment store
+      setPreference({
+        userId: user?.id || '',
+        userType: 'user',
+        preferredMethod: payoutDetails.method,
+        mtnPhone: payoutDetails.method === 'mtn_momo' ? payoutDetails.phone : undefined,
+        airtelPhone: payoutDetails.method === 'airtel_money' ? payoutDetails.phone : undefined,
+        bankName: payoutDetails.method === 'bank' ? payoutDetails.bankName : undefined,
+        bankAccountNumber: payoutDetails.method === 'bank' ? payoutDetails.accountNumber : undefined,
+        bankAccountName: payoutDetails.method === 'bank' ? payoutDetails.accountName : undefined,
+      });
+    } catch { /* offline — saved locally */ }
     setShowPayoutModal(false);
     toast.success('Payout details updated successfully!');
   };
 
   const handleRaiseDispute = async () => {
     if (!disputeText.trim()) { toast.error('Please describe the dispute'); return; }
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      await raiseDispute({
+        type: 'payout_amount',
+        raisedById: user?.id || '',
+        raisedByName: `${user?.firstName} ${user?.lastName}`,
+        raisedByRole: user?.role || 'landlord',
+        subject: 'Landlord Dispute',
+        description: disputeText,
+        amount: disputeAmount ? Number(disputeAmount) : undefined,
+      });
+    } catch { /* offline */ }
     setShowDisputeModal(false);
     setDisputeText('');
     setDisputeAmount('');

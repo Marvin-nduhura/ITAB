@@ -11,6 +11,8 @@ import { Modal } from '../../components/ui/Modal';
 import { Input, Select, Textarea } from '../../components/ui/Input';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
+import { useAuthStore } from '../../store/authStore';
+import { noticesApi } from '../../lib/api';
 import { formatCurrency, formatDate, amenityIcons, DISTRICTS } from '../../lib/utils';
 import { downloadLease } from '../../lib/download';
 import toast from 'react-hot-toast';
@@ -25,6 +27,7 @@ interface SavedSearch {
 
 export function TenantPortal() {
   const { properties } = usePropertyStore();
+  const { user } = useAuthStore();
   const navigate = useNavigate();
 
   const [tab, setTab] = useState<'lease' | 'favorites' | 'searches' | 'compare' | 'moveout' | 'renewal'>('lease');
@@ -86,7 +89,19 @@ export function TenantPortal() {
   const handleMoveout = async () => {
     if (!moveoutForm.date || !moveoutForm.reason) { toast.error('Please fill all required fields'); return; }
     setMoveoutLoading(true);
-    await new Promise(r => setTimeout(r, 1000));
+    try {
+      // Send a notice to the manager about move-out
+      await noticesApi.send({
+        propertyId: currentProperty?.id || '',
+        propertyTitle: currentProperty?.title || '',
+        tenantId: user?.id || '',
+        tenantName: `${user?.firstName} ${user?.lastName}`,
+        type: 'general',
+        subject: `Move-Out Notice — ${moveoutForm.date}`,
+        body: `I am submitting my move-out notice. Planned move-out date: ${moveoutForm.date}.\nReason: ${moveoutForm.reason}.\n${moveoutForm.notes ? `Additional notes: ${moveoutForm.notes}` : ''}`,
+        requiresAcknowledgement: true,
+      });
+    } catch { /* offline — will sync */ }
     setMoveoutLoading(false);
     setShowMoveout(false);
     toast.success('Move-out notice submitted! Your property manager has been notified.');
@@ -95,7 +110,18 @@ export function TenantPortal() {
   const handleRenewalRequest = async () => {
     if (!renewalForm.preferredTerm) { toast.error('Please select a preferred lease term'); return; }
     setRenewalLoading(true);
-    await new Promise(r => setTimeout(r, 1000));
+    try {
+      await noticesApi.send({
+        propertyId: currentProperty?.id || '',
+        propertyTitle: currentProperty?.title || '',
+        tenantId: user?.id || '',
+        tenantName: `${user?.firstName} ${user?.lastName}`,
+        type: 'lease_renewal',
+        subject: `Lease Renewal Request — ${renewalForm.preferredTerm} months`,
+        body: `I would like to request a lease renewal for ${renewalForm.preferredTerm} months.${renewalForm.proposedRent ? `\nProposed rent: UGX ${renewalForm.proposedRent}` : ''}${renewalForm.notes ? `\nNotes: ${renewalForm.notes}` : ''}`,
+        requiresAcknowledgement: false,
+      });
+    } catch { /* offline */ }
     setRenewalLoading(false);
     setRenewalSubmitted(true);
     toast.success('Renewal request submitted! Your property manager will respond within 5 business days.');

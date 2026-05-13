@@ -151,7 +151,6 @@ export function UsersPage() {
     if (!suspendTarget) return;
     if (!suspendReason.trim()) { toast.error('Please provide a reason for suspension'); return; }
     setSuspendLoading(true);
-    await new Promise(r => setTimeout(r, 600));
     suspendUser(suspendTarget.id, suspendReason.trim());
     setSuspendLoading(false);
     setSuspendTarget(null);
@@ -160,7 +159,6 @@ export function UsersPage() {
   };
 
   const handleUnsuspend = async (u: User) => {
-    await new Promise(r => setTimeout(r, 400));
     unsuspendUser(u.id);
     toast.success(`${u.firstName} ${u.lastName}'s account has been reactivated.`);
   };
@@ -279,7 +277,6 @@ export function UsersPage() {
     if (!inviteForm.email.trim()) { toast.error('Email address is required'); return; }
     if (!inviteForm.firstName.trim()) { toast.error('First name is required'); return; }
     setInviteLoading(true);
-    await new Promise(r => setTimeout(r, 1000));
 
     const link = generateInviteLink();
     setInviteLink(link);

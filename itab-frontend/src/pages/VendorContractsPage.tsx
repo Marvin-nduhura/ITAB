@@ -73,7 +73,6 @@ export function VendorContractsPage() {
     if (!vendor || !property) return;
 
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
     createContract({
       vendorId: vendor.id,
       vendorName: `${vendor.firstName} ${vendor.lastName}`,
@@ -100,7 +99,6 @@ export function VendorContractsPage() {
 
   const handleProcessPayment = async (contractId: string) => {
     setPayingId(contractId);
-    await new Promise(r => setTimeout(r, 1200));
     const tx = processContractPayment(contractId);
     setPayingId(null);
     if (tx) {

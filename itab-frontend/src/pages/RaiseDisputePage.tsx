@@ -244,11 +244,10 @@ export function RaiseDisputePage() {
     }
 
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
 
     const selectedProperty = properties.find(p => p.id === form.propertyId);
 
-    raiseDispute({
+    await raiseDispute({
       type: form.type as DisputeType,
       raisedById: user!.id,
       raisedByName: `${user!.firstName} ${user!.lastName}`,

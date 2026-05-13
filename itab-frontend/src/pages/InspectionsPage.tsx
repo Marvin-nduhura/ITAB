@@ -42,7 +42,6 @@ function DeclineLeaseModal({ open, inspection, onClose, onConfirm }: DeclineModa
   const handleConfirm = async () => {
     if (!reason.trim()) { toast.error('Please select or enter a reason'); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
     setLoading(false);
     onConfirm(reason);
     setReason('');

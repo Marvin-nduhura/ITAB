@@ -185,7 +185,6 @@ export function PropertyFormModal({ open, onClose, editProperty }: Props) {
   const handleSave = async (status: 'draft' | 'published' | 'pending_vetting') => {
     if (!validate()) return;
     setSaving(true);
-    await new Promise(r => setTimeout(r, 600));
 
     const payload = {
       title: form.title.trim(),

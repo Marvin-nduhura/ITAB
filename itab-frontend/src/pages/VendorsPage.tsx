@@ -156,8 +156,7 @@ function AddVendorModal({ open, onClose }: { open: boolean; onClose: () => void 
   const handleSave = async () => {
     if (!form.firstName || !form.lastName || !form.phone) { toast.error('Name and phone are required'); return; }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    addVendor({
+    await addVendor({
       firstName: form.firstName, lastName: form.lastName,
       email: form.email, phone: form.phone,
       category: form.category, skills,

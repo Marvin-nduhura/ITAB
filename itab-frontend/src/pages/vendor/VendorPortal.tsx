@@ -80,8 +80,7 @@ export function VendorPortal() {
   const handleSaveProfile = async () => {
     if (!myVendor) return;
     setLoading(true);
-    await new Promise(r => setTimeout(r, 600));
-    updateVendor(myVendor.id, {
+    await updateVendor(myVendor.id, {
       bio: editForm.bio,
       dailyRate: editForm.dailyRate ? Number(editForm.dailyRate) : undefined,
       hourlyRate: editForm.hourlyRate ? Number(editForm.hourlyRate) : undefined,

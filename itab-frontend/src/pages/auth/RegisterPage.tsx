@@ -263,8 +263,6 @@ export function RegisterPage() {
     }
     setAppLoading(true);
     try {
-      await new Promise(r => setTimeout(r, 800));
-
       if (pendingFormData) {
         // Email registration with application
         const newUser = {

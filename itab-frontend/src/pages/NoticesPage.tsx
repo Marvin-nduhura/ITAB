@@ -118,10 +118,9 @@ function DisputeModal({ open, onClose, notice, onSubmit }: DisputeModalProps) {
       return;
     }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 1200));
-    setLoading(false);
     onSubmit(notice.id, response.trim());
     setResponse('');
+    setLoading(false);
     onClose();
   };
 
@@ -208,8 +207,6 @@ function ComposeModal({ open, onClose, onSend }: ComposeModalProps) {
       return;
     }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 1400));
-    setLoading(false);
     onSend({
       propertyId: 'p6',
       propertyTitle: selectedTenant.property,
@@ -224,6 +221,7 @@ function ComposeModal({ open, onClose, onSend }: ComposeModalProps) {
       responseDeadline: responseDeadline || undefined,
       requiresAcknowledgement: requiresAck,
     });
+    setLoading(false);
     // Reset
     setSubject('');
     setBody('');
