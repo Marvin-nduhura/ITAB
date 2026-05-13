@@ -21,12 +21,22 @@ const pool = new Pool({
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'https://itab-frontend.onrender.com',
-    'http://localhost:5173',
-    'http://localhost:4173',
-  ],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, Render health checks)
+    if (!origin) return callback(null, true);
+    const allowed = [
+      process.env.FRONTEND_URL,
+      'https://itabproperties.com',
+      'https://www.itabproperties.com',
+      'https://itab-frontend.onrender.com',
+      'http://localhost:5173',
+      'http://localhost:4173',
+    ].filter(Boolean);
+    if (allowed.includes(origin)) return callback(null, true);
+    // Allow any *.onrender.com subdomain (for preview deployments)
+    if (origin.endsWith('.onrender.com')) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
 }));
 app.use(express.json({ limit: '20mb' }));
