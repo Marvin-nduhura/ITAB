@@ -7,6 +7,7 @@ import { StatCard } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useAuthStore } from '../store/authStore';
 import { useDataStore } from '../store/dataStore';
+import { usePropertyStore } from '../store/propertyStore';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { downloadPayoutReport, downloadStatement } from '../lib/download';
 import { filterPayoutsForUser } from '../lib/rbac';
@@ -15,9 +16,10 @@ import toast from 'react-hot-toast';
 export function PayoutsPage() {
   const { user } = useAuthStore();
   const { payouts: allPayouts } = useDataStore();
+  const { properties: allProperties } = usePropertyStore();
   const [loading, setLoading] = useState<string | null>(null);
 
-  const myPayouts = filterPayoutsForUser(allPayouts, user);
+  const myPayouts = filterPayoutsForUser(allPayouts, user, allProperties);
 
   const totalPaid = myPayouts.filter(p => p.status === 'completed').reduce((s, p) => s + p.netAmount, 0);
   const totalPending = myPayouts.filter(p => p.status === 'pending').reduce((s, p) => s + p.netAmount, 0);

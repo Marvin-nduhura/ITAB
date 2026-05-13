@@ -11,6 +11,7 @@ import { FileUpload, type UploadedFile } from '../components/ui/FileUpload';
 import { useAuthStore } from '../store/authStore';
 import { useVendorStore } from '../store/vendorStore';
 import { useDataStore } from '../store/dataStore';
+import { usePropertyStore } from '../store/propertyStore';
 import { maintenanceApi } from '../lib/api';
 import { formatDate, formatCurrency, maintenanceStatusConfig } from '../lib/utils';
 import { filterMaintenanceForUser, canDo } from '../lib/rbac';
@@ -29,9 +30,12 @@ export function MaintenancePage() {
   const { user } = useAuthStore();
   const { vendors, assignJob, completeJob, rateVendor, getJobsByMaintenance } = useVendorStore();
   const { maintenance: allMaintenance } = useDataStore();
+  const { properties: allProperties } = usePropertyStore();
 
   // Only show maintenance requests this user is allowed to see
-  const [requests, setRequests] = useState<MaintenanceRequest[]>(() => filterMaintenanceForUser(allMaintenance, user));
+  const [requests, setRequests] = useState<MaintenanceRequest[]>(() =>
+    filterMaintenanceForUser(allMaintenance, user, allProperties)
+  );
   const [showNewModal, setShowNewModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState<MaintenanceRequest | null>(null);
   const [showCompleteModal, setShowCompleteModal] = useState<MaintenanceRequest | null>(null);

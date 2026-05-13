@@ -11,6 +11,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { QRCodeDisplay } from '../components/ui/QRCodeDisplay';
 import { useAuthStore } from '../store/authStore';
 import { useDataStore } from '../store/dataStore';
+import { usePropertyStore } from '../store/propertyStore';
 import { inspectionsApi } from '../lib/api';
 import { formatCurrency, formatDate, inspectionStatusConfig, INSPECTION_FEE } from '../lib/utils';
 import { downloadReceipt } from '../lib/download';
@@ -112,8 +113,11 @@ export function InspectionsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
   const { inspections: allInspections } = useDataStore();
+  const { properties: allProperties } = usePropertyStore();
   // Only show inspections this user is allowed to see
-  const [inspections, setInspections] = useState<Inspection[]>(() => filterInspectionsForUser(allInspections, user));
+  const [inspections, setInspections] = useState<Inspection[]>(() =>
+    filterInspectionsForUser(allInspections, user, allProperties)
+  );
   const [selected, setSelected] = useState<Inspection | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [showDeclineModal, setShowDeclineModal] = useState(false);

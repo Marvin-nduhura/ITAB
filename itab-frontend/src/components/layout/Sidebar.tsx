@@ -10,7 +10,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
 import { Avatar } from '../ui/Avatar';
 import { cn } from '../../lib/utils';
-import { canAccessRoute } from '../../lib/rbac';
+import { canAccessRoute, isAwaitingApproval } from '../../lib/rbac';
 import type { UserRole } from '../../types';
 
 interface NavItem {
@@ -93,9 +93,12 @@ export function Sidebar() {
   const { sidebarOpen, setSidebarOpen } = useUIStore();
   const navigate = useNavigate();
 
+  const PENDING_NAV = new Set(['/dashboard', '/search', '/properties', '/messages', '/documents', '/notifications', '/settings']);
+
   // Filter nav items: must match role AND pass permission check if one is defined
   const filtered = navItems.filter(item => {
     if (!user) return false;
+    if (isAwaitingApproval(user) && !PENDING_NAV.has(item.to)) return false;
     if (!item.roles.includes(user.role)) return false;
     // Additional permission checks for sensitive items
     if (item.to === '/analytics') return canAccessRoute(user, '/analytics');

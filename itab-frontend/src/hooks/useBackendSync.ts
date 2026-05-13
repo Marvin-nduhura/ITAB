@@ -201,4 +201,15 @@ export function useBackendSync() {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [isOnline, isAuthenticated, fullSync]);
+
+  // When the user returns to this tab, refresh /auth/me first so admin permission/district/role changes apply without waiting for the poll interval.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && isAuthenticated && isOnline) {
+        fullSync();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [isAuthenticated, isOnline, fullSync]);
 }

@@ -1,14 +1,21 @@
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useUIStore } from '../../store/uiStore';
+import { useAuthStore } from '../../store/authStore';
+import { isAwaitingApproval, canAccessPathnameWhilePending } from '../../lib/rbac';
 import { motion, AnimatePresence } from 'framer-motion';
 import { WifiOff, RefreshCw } from 'lucide-react';
 
 export function AppLayout() {
   const { isOnline, syncPending } = useUIStore();
+  const { user } = useAuthStore();
   const location = useLocation();
+
+  if (user && isAwaitingApproval(user) && !canAccessPathnameWhilePending(location.pathname)) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-900">

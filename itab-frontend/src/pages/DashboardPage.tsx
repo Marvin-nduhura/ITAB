@@ -18,6 +18,7 @@ import {
 import {
   filterPropertiesForUser, filterInspectionsForUser,
   filterMaintenanceForUser, filterPaymentsForUser,
+  isAwaitingApproval,
 } from '../lib/rbac';
 import { useNavigate } from 'react-router-dom';
 
@@ -32,9 +33,9 @@ export function DashboardPage() {
   const navigate = useNavigate();
 
   const properties    = filterPropertiesForUser(allProperties, user);
-  const myInspections = filterInspectionsForUser(allInspections, user);
-  const myMaintenance = filterMaintenanceForUser(allMaintenance, user);
-  const myPayments    = filterPaymentsForUser(allPayments, user);
+  const myInspections = filterInspectionsForUser(allInspections, user, allProperties);
+  const myMaintenance = filterMaintenanceForUser(allMaintenance, user, allProperties);
+  const myPayments    = filterPaymentsForUser(allPayments, user, allProperties);
 
   const myVendor = vendors.find(v => v.email === user?.email || v.userId === user?.id);
   const myJobs   = jobs.filter(j => j.vendorId === myVendor?.id);
@@ -134,6 +135,19 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {user && isAwaitingApproval(user) && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="p-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/25 text-amber-900 dark:text-amber-100 text-sm"
+        >
+          <p className="font-semibold">Account pending approval</p>
+          <p className="mt-1 text-amber-800/90 dark:text-amber-200/90">
+            You can browse published listings, use <strong>Messages</strong>, and upload files under <strong>Documents</strong> for verification.
+            Other actions stay disabled until an admin approves your account.
+          </p>
+        </motion.div>
+      )}
       {/* Header */}
       <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">

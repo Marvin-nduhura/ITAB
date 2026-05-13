@@ -13,6 +13,7 @@ import { StatCard } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useAuthStore } from '../store/authStore';
 import { useDataStore } from '../store/dataStore';
+import { usePropertyStore } from '../store/propertyStore';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { downloadPaymentsCSV, downloadReceipt } from '../lib/download';
 import { filterPaymentsForUser } from '../lib/rbac';
@@ -342,6 +343,7 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
 export function PaymentsPage() {
   const { user } = useAuthStore();
   const { payments: allPayments } = useDataStore();
+  const { properties: allProperties } = usePropertyStore();
   const [showPayModal, setShowPayModal] = useState(false);
   const [selectedBalance, setSelectedBalance] = useState<RentBalance | null>(null);
   const [filterType, setFilterType] = useState('');
@@ -349,7 +351,7 @@ export function PaymentsPage() {
   const [expandedBalance, setExpandedBalance] = useState<string | null>(null);
 
   // Filter payments to only what this user is allowed to see
-  const visiblePayments = filterPaymentsForUser(allPayments, user);
+  const visiblePayments = filterPaymentsForUser(allPayments, user, allProperties);
   // Rent balances — computed from payments (no separate mock needed)
   const visibleBalances: RentBalance[] = [];
 

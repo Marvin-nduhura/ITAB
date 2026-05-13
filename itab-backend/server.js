@@ -7,6 +7,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
+const { getEffectivePermissions, hasPermission } = require('./lib/userPermissions');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -83,14 +84,35 @@ app.use(async (req, res, next) => {
 });
 
 // ─── Auth middleware ──────────────────────────────────────────────────────────
-function auth(req, res, next) {
+/** Verifies JWT, loads fresh role + per-user permission matrix from DB (same source as admin overrides). */
+async function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'No token provided' });
+  let decoded;
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
+    decoded = jwt.verify(token, JWT_SECRET);
   } catch {
-    res.status(401).json({ message: 'Invalid token' });
+    return res.status(401).json({ message: 'Invalid token' });
+  }
+  try {
+    const result = await pool.query(
+      `SELECT id, role, approval_status, permissions, is_suspended, first_name, last_name
+       FROM users WHERE id = $1`,
+      [decoded.id]
+    );
+    if (!result.rows.length) return res.status(401).json({ message: 'User not found' });
+    const row = result.rows[0];
+    if (row.is_suspended) {
+      return res.status(403).json({ message: 'Account suspended', code: 'ACCOUNT_SUSPENDED' });
+    }
+    const displayName = [row.first_name, row.last_name].filter(Boolean).join(' ') || 'User';
+    req.user = { id: row.id, role: row.role, name: displayName };
+    req.dbUserForPerms = row;
+    req.effectivePermissions = getEffectivePermissions(row);
+    next();
+  } catch (err) {
+    console.error('auth:', err);
+    res.status(500).json({ message: 'Server error' });
   }
 }
 
@@ -103,6 +125,89 @@ function requireRole(...roles) {
   };
 }
 
+function requirePerm(section, key) {
+  return (req, res, next) => {
+    if (!req.effectivePermissions) {
+      return res.status(500).json({ message: 'Permissions not available' });
+    }
+    if (!hasPermission(req.effectivePermissions, section, key)) {
+      return res.status(403).json({
+        message: 'You do not have permission for this action.',
+        code: 'PERMISSION_DENIED',
+        section,
+        key,
+      });
+    }
+    next();
+  };
+}
+
+function requireAnyPerm(pairs) {
+  return (req, res, next) => {
+    if (!req.effectivePermissions) {
+      return res.status(500).json({ message: 'Permissions not available' });
+    }
+    const ok = pairs.some(([s, k]) => hasPermission(req.effectivePermissions, s, k));
+    if (!ok) {
+      return res.status(403).json({
+        message: 'You do not have permission for this action.',
+        code: 'PERMISSION_DENIED',
+      });
+    }
+    next();
+  };
+}
+
+function requireViewUsersOrSelf(req, res, next) {
+  if (!req.effectivePermissions) {
+    return res.status(500).json({ message: 'Permissions not available' });
+  }
+  if (req.params.id === req.user.id) return next();
+  if (!hasPermission(req.effectivePermissions, 'userManagement', 'viewUsers')) {
+    return res.status(403).json({
+      message: 'You do not have permission to view this user.',
+      code: 'PERMISSION_DENIED',
+    });
+  }
+  next();
+}
+
+function requirePaymentPrefsRead(req, res, next) {
+  if (req.params.userId === req.user.id) {
+    return requirePerm('settings', 'setPaymentMethod')(req, res, next);
+  }
+  return requirePerm('userManagement', 'viewUsers')(req, res, next);
+}
+
+const MAINT_PUT_ANY = requireAnyPerm([
+  ['maintenance', 'assignVendorToJob'],
+  ['maintenance', 'markMaintenanceInProgress'],
+  ['maintenance', 'markMaintenanceCompleted'],
+  ['maintenance', 'cancelMaintenanceRequest'],
+  ['maintenance', 'revertMaintenanceStatus'],
+  ['maintenance', 'reopenMaintenanceRequest'],
+]);
+
+const ADMIN_USER_WRITE = requireAnyPerm([
+  ['userManagement', 'changeUserRole'],
+  ['userManagement', 'approveKYC'],
+  ['userManagement', 'rejectKYC'],
+  ['userManagement', 'approveUserApplication'],
+  ['userManagement', 'rejectUserApplication'],
+  ['userManagement', 'addAdminNotes'],
+  ['userManagement', 'editUserPermissions'],
+]);
+
+const RESOLVE_DISPUTE_ANY = requireAnyPerm([
+  ['disputes', 'resolveDispute'],
+  ['admin', 'resolveDispute'],
+]);
+
+const DISMISS_DISPUTE_ANY = requireAnyPerm([
+  ['disputes', 'dismissDispute'],
+  ['admin', 'dismissDispute'],
+]);
+
 function parseDbJson(val, fallback = null) {
   if (val == null || val === '') return fallback;
   if (typeof val === 'object' && val !== null && !Array.isArray(val)) return val;
@@ -114,6 +219,33 @@ function parseDbJson(val, fallback = null) {
     }
   }
   return fallback;
+}
+
+/** Load admin-configured district allow-list for this user (empty = no restriction). */
+async function fetchRestrictedDistrictsForUser(userId) {
+  const r = await pool.query('SELECT restricted_districts FROM users WHERE id = $1', [userId]);
+  if (!r.rows.length) return [];
+  const rd = parseDbJson(r.rows[0].restricted_districts, []);
+  return Array.isArray(rd) ? rd.map((x) => String(x)) : [];
+}
+
+function districtPassRestrictedList(restrictedList, district) {
+  if (!restrictedList || restrictedList.length === 0) return true;
+  const d = String(district ?? '').trim().toLowerCase();
+  if (!d) return false;
+  return restrictedList.some((x) => String(x).trim().toLowerCase() === d);
+}
+
+async function assertDistrictAllowedForUser(userId, district, res) {
+  const list = await fetchRestrictedDistrictsForUser(userId);
+  if (!districtPassRestrictedList(list, district)) {
+    res.status(403).json({
+      message:
+        'Your account is restricted from this district. Contact an administrator if you need access.',
+    });
+    return false;
+  }
+  return true;
 }
 
 // ─── Format helpers ───────────────────────────────────────────────────────────
@@ -674,7 +806,7 @@ app.get('/api/auth/me', auth, async (req, res) => {
   }
 });
 
-app.put('/api/auth/profile', auth, async (req, res) => {
+app.put('/api/auth/profile', auth, requirePerm('settings', 'editProfile'), async (req, res) => {
   try {
     const { firstName, lastName, phone, avatar } = req.body;
     const result = await pool.query(
@@ -764,7 +896,7 @@ app.post('/api/auth/google', async (req, res) => {
 // USERS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/users', auth, requireRole('admin'), async (req, res) => {
+app.get('/api/users', auth, requireRole('admin'), requirePerm('userManagement', 'viewUsers'), async (req, res) => {
   try {
     const { role, search } = req.query;
     let query = 'SELECT * FROM users WHERE 1=1';
@@ -780,7 +912,7 @@ app.get('/api/users', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-app.get('/api/users/pending', auth, requireRole('admin'), async (req, res) => {
+app.get('/api/users/pending', auth, requireRole('admin'), requireAnyPerm([['userManagement', 'viewUsers'], ['userManagement', 'approveUserApplication']]), async (req, res) => {
   try {
     const result = await pool.query("SELECT * FROM users WHERE approval_status='pending' ORDER BY created_at DESC");
     res.json({ data: result.rows.map(formatUser) });
@@ -789,7 +921,7 @@ app.get('/api/users/pending', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-app.get('/api/users/:id', auth, async (req, res) => {
+app.get('/api/users/:id', auth, requireViewUsersOrSelf, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
@@ -799,7 +931,7 @@ app.get('/api/users/:id', auth, async (req, res) => {
   }
 });
 
-app.put('/api/users/:id', auth, requireRole('admin'), async (req, res) => {
+app.put('/api/users/:id', auth, requireRole('admin'), ADMIN_USER_WRITE, async (req, res) => {
   try {
     const {
       firstName, lastName, phone, role, notes, kycStatus, approvalStatus,
@@ -828,7 +960,7 @@ app.put('/api/users/:id', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-app.patch('/api/users/:id/suspend', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/suspend', auth, requireRole('admin'), requirePerm('userManagement', 'suspendUser'), async (req, res) => {
   try {
     const { reason } = req.body;
     const result = await pool.query(
@@ -846,7 +978,7 @@ app.patch('/api/users/:id/suspend', auth, requireRole('admin'), async (req, res)
   }
 });
 
-app.patch('/api/users/:id/unsuspend', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/unsuspend', auth, requireRole('admin'), requirePerm('userManagement', 'unsuspendUser'), async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE users SET is_suspended=false, suspended_reason=NULL, suspended_at=NULL, updated_at=NOW() WHERE id=$1 RETURNING *`,
@@ -858,7 +990,7 @@ app.patch('/api/users/:id/unsuspend', auth, requireRole('admin'), async (req, re
   }
 });
 
-app.patch('/api/users/:id/approve', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/approve', auth, requireRole('admin'), requirePerm('userManagement', 'approveUserApplication'), async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE users SET approval_status='approved', kyc_status='approved', is_verified=true, updated_at=NOW() WHERE id=$1 RETURNING *`,
@@ -870,7 +1002,7 @@ app.patch('/api/users/:id/approve', auth, requireRole('admin'), async (req, res)
   }
 });
 
-app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), requirePerm('userManagement', 'rejectUserApplication'), async (req, res) => {
   try {
     const { reason } = req.body;
     const result = await pool.query(
@@ -883,33 +1015,35 @@ app.patch('/api/users/:id/reject-approval', auth, requireRole('admin'), async (r
   }
 });
 
-app.patch('/api/users/:id/permissions', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/permissions', auth, requireRole('admin'), requirePerm('userManagement', 'editUserPermissions'), async (req, res) => {
   try {
     const { permissions } = req.body;
     const result = await pool.query(
       `UPDATE users SET permissions=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
       [JSON.stringify(permissions), req.params.id]
     );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-app.patch('/api/users/:id/districts', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/districts', auth, requireRole('admin'), requirePerm('userManagement', 'setDistrictRestrictions'), async (req, res) => {
   try {
     const { districts } = req.body;
     const result = await pool.query(
       `UPDATE users SET restricted_districts=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
       [JSON.stringify(districts), req.params.id]
     );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-app.patch('/api/users/:id/role', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/users/:id/role', auth, requireRole('admin'), requirePerm('userManagement', 'changeUserRole'), async (req, res) => {
   try {
     const { role } = req.body;
     const result = await pool.query(
@@ -932,7 +1066,7 @@ app.delete('/api/auth/account', auth, async (req, res) => {
   }
 });
 
-app.delete('/api/users/:id', auth, requireRole('admin'), async (req, res) => {
+app.delete('/api/users/:id', auth, requireRole('admin'), requirePerm('userManagement', 'banUser'), async (req, res) => {
   try {
     if (req.params.id === req.user.id) {
       return res.status(400).json({ message: 'You cannot delete your own admin account from this screen. Use Settings if self-delete is enabled.' });
@@ -984,7 +1118,7 @@ app.get('/api/properties/:id', async (req, res) => {
   }
 });
 
-app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agent', 'landlord'), async (req, res) => {
+app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agent', 'landlord'), requirePerm('properties', 'addProperty'), async (req, res) => {
   try {
     const {
       title, description, type, address, district, latitude, longitude,
@@ -992,6 +1126,7 @@ app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agen
       amenities, managementFeePercent, itabFeePercent, photos, tourUrl,
       landlordId, landlordName,
     } = req.body;
+    if (!(await assertDistrictAllowedForUser(req.user.id, district, res))) return;
     const id = uuidv4();
     const result = await pool.query(
       `INSERT INTO properties (id, title, description, type, status, address, district, latitude, longitude,
@@ -1019,14 +1154,21 @@ app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agen
   }
 });
 
-app.put('/api/properties/:id', auth, async (req, res) => {
+app.put('/api/properties/:id', auth, requirePerm('properties', 'editProperty'), async (req, res) => {
   try {
+    const existing = await pool.query('SELECT * FROM properties WHERE id=$1', [req.params.id]);
+    if (existing.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
     const {
       title, description, type, address, district, latitude, longitude,
       bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
       amenities, photos, status, managementFeePercent, itabFeePercent,
       isFeatured, tourUrl, landlordId, landlordName, tenantId, leaseStart, leaseEnd,
     } = req.body;
+    const effDistrict =
+      district !== undefined && district !== null && district !== ''
+        ? district
+        : existing.rows[0].district;
+    if (!(await assertDistrictAllowedForUser(req.user.id, effDistrict, res))) return;
     const result = await pool.query(
       `UPDATE properties SET
         title=COALESCE($1,title), description=COALESCE($2,description), type=COALESCE($3,type),
@@ -1061,7 +1203,7 @@ app.put('/api/properties/:id', auth, async (req, res) => {
   }
 });
 
-app.delete('/api/properties/:id', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.delete('/api/properties/:id', auth, requireRole('admin', 'property_manager'), requirePerm('properties', 'deleteProperty'), async (req, res) => {
   try {
     await pool.query('DELETE FROM properties WHERE id = $1', [req.params.id]);
     res.json({ data: { success: true } });
@@ -1070,7 +1212,7 @@ app.delete('/api/properties/:id', auth, requireRole('admin', 'property_manager')
   }
 });
 
-app.patch('/api/properties/:id/feature', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.patch('/api/properties/:id/feature', auth, requireRole('admin', 'property_manager'), requirePerm('properties', 'featureProperty'), async (req, res) => {
   try {
     const result = await pool.query(
       'UPDATE properties SET is_featured = NOT is_featured, updated_at=NOW() WHERE id=$1 RETURNING *',
@@ -1082,7 +1224,7 @@ app.patch('/api/properties/:id/feature', auth, requireRole('admin', 'property_ma
   }
 });
 
-app.post('/api/properties/:id/photos', auth, async (req, res) => {
+app.post('/api/properties/:id/photos', auth, requirePerm('properties', 'uploadPropertyPhotos'), async (req, res) => {
   try {
     const { photoUrls } = req.body; // array of URLs (base64 or CDN)
     const prop = await pool.query('SELECT photos FROM properties WHERE id=$1', [req.params.id]);
@@ -1103,7 +1245,7 @@ app.post('/api/properties/:id/photos', auth, async (req, res) => {
 // INSPECTIONS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/inspections', auth, async (req, res) => {
+app.get('/api/inspections', auth, requirePerm('inspections', 'viewInspections'), async (req, res) => {
   try {
     let query = 'SELECT * FROM inspections WHERE 1=1';
     const params = [];
@@ -1118,7 +1260,7 @@ app.get('/api/inspections', auth, async (req, res) => {
   }
 });
 
-app.get('/api/inspections/:id', auth, async (req, res) => {
+app.get('/api/inspections/:id', auth, requirePerm('inspections', 'viewInspections'), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM inspections WHERE id=$1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
@@ -1128,11 +1270,12 @@ app.get('/api/inspections/:id', auth, async (req, res) => {
   }
 });
 
-app.post('/api/inspections', auth, requireRole('tenant'), async (req, res) => {
+app.post('/api/inspections', auth, requireRole('tenant'), requirePerm('inspections', 'bookInspection'), async (req, res) => {
   try {
     const { propertyId, scheduledDate, scheduledTime } = req.body;
     const prop = await pool.query('SELECT * FROM properties WHERE id = $1', [propertyId]);
     if (prop.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    if (!(await assertDistrictAllowedForUser(req.user.id, prop.rows[0].district, res))) return;
     const tenantResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
     const tenant = tenantResult.rows[0];
     const id = uuidv4();
@@ -1150,7 +1293,7 @@ app.post('/api/inspections', auth, requireRole('tenant'), async (req, res) => {
   }
 });
 
-app.patch('/api/inspections/:id/confirm', auth, async (req, res) => {
+app.patch('/api/inspections/:id/confirm', auth, requirePerm('inspections', 'confirmInspection'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE inspections SET status='confirmed', updated_at=NOW() WHERE id=$1 RETURNING *",
@@ -1162,7 +1305,7 @@ app.patch('/api/inspections/:id/confirm', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/inspections/:id/cancel', auth, async (req, res) => {
+app.patch('/api/inspections/:id/cancel', auth, requirePerm('inspections', 'cancelInspection'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE inspections SET status='cancelled', updated_at=NOW() WHERE id=$1 RETURNING *",
@@ -1174,7 +1317,7 @@ app.patch('/api/inspections/:id/cancel', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/inspections/:id/reschedule', auth, async (req, res) => {
+app.patch('/api/inspections/:id/reschedule', auth, requirePerm('inspections', 'rescheduleInspection'), async (req, res) => {
   try {
     const { scheduledDate, scheduledTime } = req.body;
     const result = await pool.query(
@@ -1188,7 +1331,7 @@ app.patch('/api/inspections/:id/reschedule', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/inspections/:id/no-show', auth, async (req, res) => {
+app.patch('/api/inspections/:id/no-show', auth, requirePerm('inspections', 'markInspectionNoShow'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE inspections SET status='no_show', no_show_count=no_show_count+1, updated_at=NOW() WHERE id=$1 RETURNING *",
@@ -1200,7 +1343,7 @@ app.patch('/api/inspections/:id/no-show', auth, async (req, res) => {
   }
 });
 
-app.post('/api/inspections/:id/pay', auth, async (req, res) => {
+app.post('/api/inspections/:id/pay', auth, requirePerm('inspections', 'payInspectionFee'), async (req, res) => {
   try {
     const { method, reference } = req.body;
     const result = await pool.query(
@@ -1218,13 +1361,19 @@ app.post('/api/inspections/:id/pay', auth, async (req, res) => {
 // PAYMENTS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/payments', auth, async (req, res) => {
+app.get('/api/payments', auth, requireAnyPerm([['payments', 'viewOwnPayments'], ['payments', 'viewAllPayments']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM payments WHERE 1=1';
     const params = [];
     let i = 1;
-    if (req.user.role === 'tenant') { query += ` AND tenant_id = $${i}`; params.push(req.user.id); i++; }
-    else if (req.user.role === 'landlord') { query += ` AND landlord_id = $${i}`; params.push(req.user.id); i++; }
+    if (!hasPermission(req.effectivePermissions, 'payments', 'viewAllPayments')) {
+      if (req.user.role === 'tenant') { query += ` AND tenant_id = $${i}`; params.push(req.user.id); i++; }
+      else if (req.user.role === 'landlord') { query += ` AND landlord_id = $${i}`; params.push(req.user.id); i++; }
+      else {
+        query += ` AND (tenant_id = $${i} OR landlord_id = $${i})`;
+        params.push(req.user.id); i++;
+      }
+    }
     query += ' ORDER BY created_at DESC';
     const result = await pool.query(query, params);
     res.json({ data: result.rows.map(formatPayment) });
@@ -1233,17 +1382,22 @@ app.get('/api/payments', auth, async (req, res) => {
   }
 });
 
-app.get('/api/payments/:id', auth, async (req, res) => {
+app.get('/api/payments/:id', auth, requireAnyPerm([['payments', 'viewOwnPayments'], ['payments', 'viewAllPayments']]), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM payments WHERE id=$1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
-    res.json({ data: formatPayment(result.rows[0]) });
+    const row = result.rows[0];
+    if (!hasPermission(req.effectivePermissions, 'payments', 'viewAllPayments')) {
+      const ok = row.tenant_id === req.user.id || row.landlord_id === req.user.id;
+      if (!ok) return res.status(403).json({ message: 'Forbidden', code: 'PERMISSION_DENIED' });
+    }
+    res.json({ data: formatPayment(row) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-app.post('/api/payments/rent', auth, requireRole('tenant'), async (req, res) => {
+app.post('/api/payments/rent', auth, requireRole('tenant'), requireAnyPerm([['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance']]), async (req, res) => {
   try {
     const { propertyId, propertyTitle, amount, method, reference, rentPeriod, isPartial, inspectionCreditApplied, landlordId } = req.body;
     const id = uuidv4();
@@ -1264,7 +1418,7 @@ app.post('/api/payments/rent', auth, requireRole('tenant'), async (req, res) => 
   }
 });
 
-app.post('/api/payments/mtn/initiate', auth, async (req, res) => {
+app.post('/api/payments/mtn/initiate', auth, requireAnyPerm([['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance'], ['inspections', 'payInspectionFee']]), async (req, res) => {
   try {
     const { phone } = req.body;
     const reference = `MTN-${Date.now()}`;
@@ -1274,7 +1428,7 @@ app.post('/api/payments/mtn/initiate', auth, async (req, res) => {
   }
 });
 
-app.post('/api/payments/airtel/initiate', auth, async (req, res) => {
+app.post('/api/payments/airtel/initiate', auth, requireAnyPerm([['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance'], ['inspections', 'payInspectionFee']]), async (req, res) => {
   try {
     const { phone } = req.body;
     const reference = `AIR-${Date.now()}`;
@@ -1284,11 +1438,11 @@ app.post('/api/payments/airtel/initiate', auth, async (req, res) => {
   }
 });
 
-app.get('/api/payments/status/:ref', auth, async (req, res) => {
+app.get('/api/payments/status/:ref', auth, requireAnyPerm([['payments', 'viewOwnPayments'], ['payments', 'viewAllPayments'], ['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance']]), async (req, res) => {
   res.json({ data: { reference: req.params.ref, status: 'completed' } });
 });
 
-app.get('/api/payments/:id/receipt', auth, async (req, res) => {
+app.get('/api/payments/:id/receipt', auth, requirePerm('payments', 'downloadReceipt'), async (req, res) => {
   res.json({ data: { receiptUrl: null, message: 'Receipt generation coming soon' } });
 });
 
@@ -1296,12 +1450,12 @@ app.get('/api/payments/:id/receipt', auth, async (req, res) => {
 // TRANSACTIONS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/transactions', auth, async (req, res) => {
+app.get('/api/transactions', auth, requireAnyPerm([['transactions', 'viewOwnTransactions'], ['transactions', 'viewAllTransactions']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM transactions WHERE 1=1';
     const params = [];
     let i = 1;
-    if (req.user.role !== 'admin' && req.user.role !== 'property_manager') {
+    if (!hasPermission(req.effectivePermissions, 'transactions', 'viewAllTransactions')) {
       query += ` AND (sender_id = $${i} OR receiver_id = $${i})`;
       params.push(req.user.id); i++;
     }
@@ -1313,7 +1467,7 @@ app.get('/api/transactions', auth, async (req, res) => {
   }
 });
 
-app.post('/api/transactions', auth, async (req, res) => {
+app.post('/api/transactions', auth, requireAnyPerm([['transactions', 'viewOwnTransactions'], ['transactions', 'viewAllTransactions']]), async (req, res) => {
   try {
     const tx = req.body;
     const id = tx.id || uuidv4();
@@ -1343,7 +1497,7 @@ app.post('/api/transactions', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/transactions/:id/retry', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.patch('/api/transactions/:id/retry', auth, requireRole('admin', 'property_manager'), requirePerm('transactions', 'retryFailedTransaction'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE transactions SET status='completed', processed_at=NOW(), failure_reason=NULL WHERE id=$1 RETURNING *",
@@ -1355,7 +1509,7 @@ app.patch('/api/transactions/:id/retry', auth, requireRole('admin', 'property_ma
   }
 });
 
-app.patch('/api/transactions/:id/refund', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/transactions/:id/refund', auth, requireRole('admin'), requirePerm('transactions', 'refundTransaction'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE transactions SET status='refunded', updated_at=NOW() WHERE id=$1 RETURNING *",
@@ -1371,7 +1525,7 @@ app.patch('/api/transactions/:id/refund', auth, requireRole('admin'), async (req
 // MAINTENANCE ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/maintenance', auth, async (req, res) => {
+app.get('/api/maintenance', auth, requireAnyPerm([['maintenance', 'viewOwnMaintenance'], ['maintenance', 'viewAllMaintenance']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM maintenance_requests WHERE 1=1';
     const params = [];
@@ -1386,7 +1540,7 @@ app.get('/api/maintenance', auth, async (req, res) => {
   }
 });
 
-app.get('/api/maintenance/:id', auth, async (req, res) => {
+app.get('/api/maintenance/:id', auth, requireAnyPerm([['maintenance', 'viewOwnMaintenance'], ['maintenance', 'viewAllMaintenance']]), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM maintenance_requests WHERE id=$1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
@@ -1396,9 +1550,12 @@ app.get('/api/maintenance/:id', auth, async (req, res) => {
   }
 });
 
-app.post('/api/maintenance', auth, requireRole('tenant', 'property_manager', 'landlord'), async (req, res) => {
+app.post('/api/maintenance', auth, requireRole('tenant', 'property_manager', 'landlord'), requirePerm('maintenance', 'submitMaintenanceRequest'), async (req, res) => {
   try {
     const { propertyId, propertyTitle, title, description, priority, photos } = req.body;
+    const prop = await pool.query('SELECT district FROM properties WHERE id = $1', [propertyId]);
+    if (prop.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    if (!(await assertDistrictAllowedForUser(req.user.id, prop.rows[0].district, res))) return;
     const tenantResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
     const tenant = tenantResult.rows[0];
     const id = uuidv4();
@@ -1416,7 +1573,7 @@ app.post('/api/maintenance', auth, requireRole('tenant', 'property_manager', 'la
   }
 });
 
-app.put('/api/maintenance/:id', auth, async (req, res) => {
+app.put('/api/maintenance/:id', auth, MAINT_PUT_ANY, async (req, res) => {
   try {
     const { status, vendorId, vendorName, estimatedCost, actualCost } = req.body;
     const result = await pool.query(
@@ -1433,7 +1590,7 @@ app.put('/api/maintenance/:id', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/maintenance/:id/assign', auth, requireRole('admin', 'property_manager', 'landlord'), async (req, res) => {
+app.patch('/api/maintenance/:id/assign', auth, requireRole('admin', 'property_manager', 'landlord'), requirePerm('maintenance', 'assignVendorToJob'), async (req, res) => {
   try {
     const { vendorId } = req.body;
     const vendor = await pool.query('SELECT * FROM vendors WHERE id=$1', [vendorId]);
@@ -1448,7 +1605,7 @@ app.patch('/api/maintenance/:id/assign', auth, requireRole('admin', 'property_ma
   }
 });
 
-app.patch('/api/maintenance/:id/complete', auth, async (req, res) => {
+app.patch('/api/maintenance/:id/complete', auth, requirePerm('maintenance', 'markMaintenanceCompleted'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE maintenance_requests SET status='completed', completed_at=NOW(), updated_at=NOW() WHERE id=$1 RETURNING *",
@@ -1464,12 +1621,15 @@ app.patch('/api/maintenance/:id/complete', auth, async (req, res) => {
 // PAYOUTS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/payouts', auth, async (req, res) => {
+app.get('/api/payouts', auth, requireAnyPerm([['payouts', 'viewOwnPayouts'], ['payouts', 'viewAllPayouts']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM payouts WHERE 1=1';
     const params = [];
     let i = 1;
-    if (req.user.role === 'landlord') { query += ` AND landlord_id = $${i}`; params.push(req.user.id); i++; }
+    if (!hasPermission(req.effectivePermissions, 'payouts', 'viewAllPayouts')) {
+      query += ` AND landlord_id = $${i}`;
+      params.push(req.user.id); i++;
+    }
     query += ' ORDER BY scheduled_date DESC';
     const result = await pool.query(query, params);
     res.json({ data: result.rows.map(formatPayout) });
@@ -1478,7 +1638,7 @@ app.get('/api/payouts', auth, async (req, res) => {
   }
 });
 
-app.post('/api/payouts/:id/process', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.post('/api/payouts/:id/process', auth, requireRole('admin', 'property_manager'), requirePerm('payouts', 'processPayout'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE payouts SET status='completed', processed_at=NOW() WHERE id=$1 RETURNING *",
@@ -1490,7 +1650,7 @@ app.post('/api/payouts/:id/process', auth, requireRole('admin', 'property_manage
   }
 });
 
-app.post('/api/payouts/:id/retry', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.post('/api/payouts/:id/retry', auth, requireRole('admin', 'property_manager'), requirePerm('payouts', 'retryFailedPayout'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE payouts SET status='processing', retry_count=retry_count+1 WHERE id=$1 RETURNING *",
@@ -1507,7 +1667,7 @@ app.post('/api/payouts/:id/retry', auth, requireRole('admin', 'property_manager'
 // MESSAGES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/messages/conversations', auth, async (req, res) => {
+app.get('/api/messages/conversations', auth, requirePerm('messages', 'viewMessages'), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT c.*, 
@@ -1525,7 +1685,7 @@ app.get('/api/messages/conversations', auth, async (req, res) => {
   }
 });
 
-app.get('/api/messages/:convId', auth, async (req, res) => {
+app.get('/api/messages/:convId', auth, requirePerm('messages', 'viewMessages'), async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM messages WHERE conversation_id=$1 ORDER BY created_at ASC',
@@ -1542,7 +1702,7 @@ app.get('/api/messages/:convId', auth, async (req, res) => {
   }
 });
 
-app.post('/api/messages/conversations', auth, async (req, res) => {
+app.post('/api/messages/conversations', auth, requirePerm('messages', 'sendMessage'), async (req, res) => {
   try {
     const { participantIds, participantDetails, propertyId, propertyTitle } = req.body;
     const id = uuidv4();
@@ -1558,7 +1718,7 @@ app.post('/api/messages/conversations', auth, async (req, res) => {
   }
 });
 
-app.post('/api/messages/:convId', auth, async (req, res) => {
+app.post('/api/messages/:convId', auth, requirePerm('messages', 'sendMessage'), async (req, res) => {
   try {
     const { content } = req.body;
     const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -1582,7 +1742,7 @@ app.post('/api/messages/:convId', auth, async (req, res) => {
 // NOTIFICATIONS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/notifications', auth, async (req, res) => {
+app.get('/api/notifications', auth, requirePerm('settings', 'manageNotificationPreferences'), async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
@@ -1594,7 +1754,7 @@ app.get('/api/notifications', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/notifications/:id/read', auth, async (req, res) => {
+app.patch('/api/notifications/:id/read', auth, requirePerm('settings', 'manageNotificationPreferences'), async (req, res) => {
   try {
     await pool.query('UPDATE notifications SET is_read=true WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
     res.json({ data: { success: true } });
@@ -1603,7 +1763,7 @@ app.patch('/api/notifications/:id/read', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/notifications/read-all', auth, async (req, res) => {
+app.patch('/api/notifications/read-all', auth, requirePerm('settings', 'manageNotificationPreferences'), async (req, res) => {
   try {
     await pool.query('UPDATE notifications SET is_read=true WHERE user_id=$1', [req.user.id]);
     res.json({ data: { success: true } });
@@ -1612,7 +1772,7 @@ app.patch('/api/notifications/read-all', auth, async (req, res) => {
   }
 });
 
-app.post('/api/notifications', auth, async (req, res) => {
+app.post('/api/notifications', auth, requirePerm('notices', 'sendNotice'), async (req, res) => {
   try {
     const { userId, type, title, body, actionUrl } = req.body;
     const id = uuidv4();
@@ -1631,7 +1791,7 @@ app.post('/api/notifications', auth, async (req, res) => {
 // VENDORS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/vendors', auth, async (req, res) => {
+app.get('/api/vendors', auth, requirePerm('vendors', 'viewVendors'), async (req, res) => {
   try {
     const { category, district } = req.query;
     let query = 'SELECT * FROM vendors WHERE 1=1';
@@ -1647,7 +1807,7 @@ app.get('/api/vendors', auth, async (req, res) => {
   }
 });
 
-app.get('/api/vendors/:id', auth, async (req, res) => {
+app.get('/api/vendors/:id', auth, requirePerm('vendors', 'viewVendors'), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM vendors WHERE id=$1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'Not found' });
@@ -1657,7 +1817,7 @@ app.get('/api/vendors/:id', auth, async (req, res) => {
   }
 });
 
-app.post('/api/vendors', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.post('/api/vendors', auth, requireRole('admin', 'property_manager'), requirePerm('vendors', 'addVendor'), async (req, res) => {
   try {
     const { firstName, lastName, email, phone, category, skills, bio, district, address, dailyRate, hourlyRate } = req.body;
     const id = uuidv4();
@@ -1674,7 +1834,7 @@ app.post('/api/vendors', auth, requireRole('admin', 'property_manager'), async (
   }
 });
 
-app.put('/api/vendors/:id', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.put('/api/vendors/:id', auth, requireRole('admin', 'property_manager'), requirePerm('vendors', 'editVendor'), async (req, res) => {
   try {
     const { firstName, lastName, phone, category, skills, bio, district, address, dailyRate, hourlyRate, availability, isActive } = req.body;
     const result = await pool.query(
@@ -1693,7 +1853,7 @@ app.put('/api/vendors/:id', auth, requireRole('admin', 'property_manager'), asyn
   }
 });
 
-app.patch('/api/vendors/:id/rate', auth, async (req, res) => {
+app.patch('/api/vendors/:id/rate', auth, requirePerm('maintenance', 'rateVendorAfterJob'), async (req, res) => {
   try {
     const { rating, jobId, comment, ratedByName } = req.body;
     const id = uuidv4();
@@ -1717,7 +1877,7 @@ app.patch('/api/vendors/:id/rate', auth, async (req, res) => {
 });
 
 // Vendor jobs
-app.get('/api/vendor-jobs', auth, async (req, res) => {
+app.get('/api/vendor-jobs', auth, requireAnyPerm([['maintenance', 'viewOwnMaintenance'], ['maintenance', 'viewAllMaintenance']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM vendor_jobs WHERE 1=1';
     const params = [];
@@ -1731,7 +1891,7 @@ app.get('/api/vendor-jobs', auth, async (req, res) => {
   }
 });
 
-app.post('/api/vendor-jobs', auth, requireRole('admin', 'property_manager', 'landlord'), async (req, res) => {
+app.post('/api/vendor-jobs', auth, requireRole('admin', 'property_manager', 'landlord'), requirePerm('maintenance', 'assignVendorToJob'), async (req, res) => {
   try {
     const { vendorId, vendorName, maintenanceRequestId, propertyTitle, propertyAddress, title, description, scheduledDate, estimatedCost, managerNotes } = req.body;
     const id = uuidv4();
@@ -1749,7 +1909,7 @@ app.post('/api/vendor-jobs', auth, requireRole('admin', 'property_manager', 'lan
   }
 });
 
-app.put('/api/vendor-jobs/:id', auth, async (req, res) => {
+app.put('/api/vendor-jobs/:id', auth, requireAnyPerm([['maintenance', 'rateVendorAfterJob'], ['maintenance', 'markMaintenanceCompleted'], ['maintenance', 'markMaintenanceInProgress']]), async (req, res) => {
   try {
     const { status, actualCost, vendorNotes, rating, ratingComment } = req.body;
     const result = await pool.query(
@@ -1770,7 +1930,7 @@ app.put('/api/vendor-jobs/:id', auth, async (req, res) => {
 // VENDOR CONTRACTS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/contracts', auth, async (req, res) => {
+app.get('/api/contracts', auth, requirePerm('contracts', 'viewContracts'), async (req, res) => {
   try {
     let query = 'SELECT * FROM vendor_contracts WHERE 1=1';
     const params = [];
@@ -1785,7 +1945,7 @@ app.get('/api/contracts', auth, async (req, res) => {
   }
 });
 
-app.post('/api/contracts', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.post('/api/contracts', auth, requireRole('admin', 'property_manager'), requirePerm('contracts', 'createContract'), async (req, res) => {
   try {
     const { vendorId, vendorName, propertyId, propertyTitle, type, description, amount, currency, startDate, endDate, paymentMethod, nextPaymentDate } = req.body;
     const id = uuidv4();
@@ -1802,7 +1962,7 @@ app.post('/api/contracts', auth, requireRole('admin', 'property_manager'), async
   }
 });
 
-app.put('/api/contracts/:id', auth, async (req, res) => {
+app.put('/api/contracts/:id', auth, requirePerm('contracts', 'editContract'), async (req, res) => {
   try {
     const { status, nextPaymentDate } = req.body;
     const result = await pool.query(
@@ -1820,12 +1980,15 @@ app.put('/api/contracts/:id', auth, async (req, res) => {
 // DOCUMENTS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/documents', auth, async (req, res) => {
+app.get('/api/documents', auth, requireAnyPerm([['documents', 'viewOwnDocuments'], ['documents', 'viewAllDocuments']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM documents WHERE 1=1';
     const params = [];
     let i = 1;
-    if (req.user.role !== 'admin') { query += ` AND owner_id = $${i}`; params.push(req.user.id); i++; }
+    if (!hasPermission(req.effectivePermissions, 'documents', 'viewAllDocuments')) {
+      query += ` AND owner_id = $${i}`;
+      params.push(req.user.id); i++;
+    }
     query += ' ORDER BY uploaded_at DESC';
     const result = await pool.query(query, params);
     res.json({ data: result.rows.map(formatDocument) });
@@ -1834,7 +1997,7 @@ app.get('/api/documents', auth, async (req, res) => {
   }
 });
 
-app.post('/api/documents', auth, async (req, res) => {
+app.post('/api/documents', auth, requirePerm('documents', 'uploadDocument'), async (req, res) => {
   try {
     const { name, category, fileUrl, fileType, fileSize, expiresAt, ownerName, ownerRole } = req.body;
     const id = uuidv4();
@@ -1854,7 +2017,7 @@ app.post('/api/documents', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/documents/:id/approve', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/documents/:id/approve', auth, requireRole('admin'), requirePerm('documents', 'approveKYCDocument'), async (req, res) => {
   try {
     const { notes } = req.body;
     const adminResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -1869,7 +2032,7 @@ app.patch('/api/documents/:id/approve', auth, requireRole('admin'), async (req, 
   }
 });
 
-app.patch('/api/documents/:id/reject', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/documents/:id/reject', auth, requireRole('admin'), requirePerm('documents', 'rejectKYCDocument'), async (req, res) => {
   try {
     const { notes } = req.body;
     const adminResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -1884,7 +2047,7 @@ app.patch('/api/documents/:id/reject', auth, requireRole('admin'), async (req, r
   }
 });
 
-app.delete('/api/documents/:id', auth, async (req, res) => {
+app.delete('/api/documents/:id', auth, requirePerm('documents', 'deleteDocument'), async (req, res) => {
   try {
     await pool.query('DELETE FROM documents WHERE id=$1 AND (owner_id=$2 OR $3=true)',
       [req.params.id, req.user.id, req.user.role === 'admin']);
@@ -1898,7 +2061,7 @@ app.delete('/api/documents/:id', auth, async (req, res) => {
 // NOTICES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/notices', auth, async (req, res) => {
+app.get('/api/notices', auth, requirePerm('notices', 'viewNotices'), async (req, res) => {
   try {
     let query = 'SELECT * FROM tenant_notices WHERE 1=1';
     const params = [];
@@ -1912,7 +2075,7 @@ app.get('/api/notices', auth, async (req, res) => {
   }
 });
 
-app.post('/api/notices', auth, requireRole('admin', 'property_manager', 'landlord'), async (req, res) => {
+app.post('/api/notices', auth, requireRole('admin', 'property_manager', 'landlord'), requirePerm('notices', 'sendNotice'), async (req, res) => {
   try {
     const { propertyId, propertyTitle, tenantId, tenantName, type, subject, body, effectiveDate, responseDeadline, requiresAcknowledgement, attachmentUrl } = req.body;
     const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -1935,7 +2098,7 @@ app.post('/api/notices', auth, requireRole('admin', 'property_manager', 'landlor
   }
 });
 
-app.patch('/api/notices/:id/acknowledge', auth, requireRole('tenant'), async (req, res) => {
+app.patch('/api/notices/:id/acknowledge', auth, requireRole('tenant'), requirePerm('notices', 'acknowledgeNotice'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE tenant_notices SET status='acknowledged', acknowledged_at=NOW() WHERE id=$1 AND tenant_id=$2 RETURNING *",
@@ -1947,7 +2110,7 @@ app.patch('/api/notices/:id/acknowledge', auth, requireRole('tenant'), async (re
   }
 });
 
-app.patch('/api/notices/:id/read', auth, async (req, res) => {
+app.patch('/api/notices/:id/read', auth, requirePerm('notices', 'viewNotices'), async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE tenant_notices SET status=CASE WHEN status='unread' THEN 'read' ELSE status END, read_at=COALESCE(read_at,NOW()) WHERE id=$1 RETURNING *",
@@ -1963,12 +2126,13 @@ app.patch('/api/notices/:id/read', auth, async (req, res) => {
 // DISPUTES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/disputes', auth, async (req, res) => {
+app.get('/api/disputes', auth, requireAnyPerm([['disputes', 'viewOwnDisputes'], ['disputes', 'viewAllDisputes']]), async (req, res) => {
   try {
     let query = 'SELECT * FROM disputes WHERE 1=1';
     const params = [];
     let i = 1;
-    if (req.user.role !== 'admin') {
+    const canViewAll = hasPermission(req.effectivePermissions, 'disputes', 'viewAllDisputes');
+    if (!canViewAll) {
       query += ` AND (raised_by_id = $${i} OR against_id = $${i})`;
       params.push(req.user.id); i++;
     }
@@ -1980,7 +2144,7 @@ app.get('/api/disputes', auth, async (req, res) => {
   }
 });
 
-app.post('/api/disputes', auth, async (req, res) => {
+app.post('/api/disputes', auth, requirePerm('disputes', 'raiseDispute'), async (req, res) => {
   try {
     const { type, againstId, againstName, againstRole, propertyId, propertyTitle, transactionId, subject, description, evidence, amount } = req.body;
     const userResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -2003,7 +2167,7 @@ app.post('/api/disputes', auth, async (req, res) => {
   }
 });
 
-app.patch('/api/disputes/:id/resolve', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/disputes/:id/resolve', auth, requireRole('admin'), RESOLVE_DISPUTE_ANY, async (req, res) => {
   try {
     const { resolution } = req.body;
     const adminResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -2019,7 +2183,7 @@ app.patch('/api/disputes/:id/resolve', auth, requireRole('admin'), async (req, r
   }
 });
 
-app.patch('/api/disputes/:id/dismiss', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/disputes/:id/dismiss', auth, requireRole('admin'), DISMISS_DISPUTE_ANY, async (req, res) => {
   try {
     const result = await pool.query(
       "UPDATE disputes SET status='dismissed', updated_at=NOW() WHERE id=$1 RETURNING *",
@@ -2035,7 +2199,7 @@ app.patch('/api/disputes/:id/dismiss', auth, requireRole('admin'), async (req, r
 // ANALYTICS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/analytics/dashboard', auth, async (req, res) => {
+app.get('/api/analytics/dashboard', auth, requirePerm('analytics', 'viewBasicAnalytics'), async (req, res) => {
   try {
     const [props, tenants, maintenance, payments, payouts, inspFees] = await Promise.all([
       pool.query(`SELECT COUNT(*) as total,
@@ -2070,7 +2234,7 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
   }
 });
 
-app.get('/api/analytics/revenue', auth, requireRole('admin', 'property_manager'), async (req, res) => {
+app.get('/api/analytics/revenue', auth, requireRole('admin', 'property_manager'), requireAnyPerm([['analytics', 'viewPlatformRevenue'], ['analytics', 'viewBasicAnalytics']]), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT date_trunc('month', created_at) as month, SUM(amount) as total
@@ -2083,7 +2247,7 @@ app.get('/api/analytics/revenue', auth, requireRole('admin', 'property_manager')
   }
 });
 
-app.get('/api/analytics/occupancy', auth, async (req, res) => {
+app.get('/api/analytics/occupancy', auth, requirePerm('analytics', 'viewBasicAnalytics'), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT district, COUNT(*) as total,
@@ -2100,7 +2264,7 @@ app.get('/api/analytics/occupancy', auth, async (req, res) => {
 // AUDIT LOGS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/audit-logs', auth, requireRole('admin'), async (req, res) => {
+app.get('/api/audit-logs', auth, requireRole('admin'), requirePerm('admin', 'viewAuditLogs'), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200');
     res.json({ data: result.rows.map(formatAuditLog) });
@@ -2109,7 +2273,7 @@ app.get('/api/audit-logs', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
-app.post('/api/audit-logs', auth, async (req, res) => {
+app.post('/api/audit-logs', auth, requireAnyPerm([['admin', 'viewAuditLogs'], ['admin', 'exportAuditLogs']]), async (req, res) => {
   try {
     const { action, performedByName, performedByRole, targetId, targetName, description, metadata } = req.body;
     const id = uuidv4();
@@ -2128,7 +2292,7 @@ app.post('/api/audit-logs', auth, async (req, res) => {
 // ANNOUNCEMENTS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/announcements', auth, async (req, res) => {
+app.get('/api/announcements', auth, requireAnyPerm([['admin', 'sendAnnouncement'], ['notices', 'viewNotices']]), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT * FROM announcements WHERE target_roles @> $1::jsonb OR target_roles = '[]'::jsonb ORDER BY created_at DESC LIMIT 20`,
@@ -2140,7 +2304,7 @@ app.get('/api/announcements', auth, async (req, res) => {
   }
 });
 
-app.post('/api/announcements', auth, requireRole('admin'), async (req, res) => {
+app.post('/api/announcements', auth, requireRole('admin'), requirePerm('admin', 'sendAnnouncement'), async (req, res) => {
   try {
     const { title, body, targetRoles } = req.body;
     const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
@@ -2162,7 +2326,7 @@ app.post('/api/announcements', auth, requireRole('admin'), async (req, res) => {
 // AGENT APPLICATIONS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/agent-applications', auth, requireRole('admin'), async (req, res) => {
+app.get('/api/agent-applications', auth, requireRole('admin'), requirePerm('admin', 'viewAgentApplications'), async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM agent_applications ORDER BY created_at DESC');
     res.json({ data: result.rows.map(formatAgentApplication) });
@@ -2194,7 +2358,7 @@ app.post('/api/agent-applications', async (req, res) => {
   }
 });
 
-app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), requirePerm('admin', 'approveAgentApplication'), async (req, res) => {
   try {
     const adminNote = req.body.adminNote ?? req.body.note ?? '';
     const appRow = await pool.query('SELECT user_id FROM agent_applications WHERE id=$1', [req.params.id]);
@@ -2216,7 +2380,7 @@ app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), asy
   }
 });
 
-app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), async (req, res) => {
+app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), requirePerm('admin', 'rejectAgentApplication'), async (req, res) => {
   try {
     const adminNote = req.body.adminNote ?? req.body.note ?? '';
     const appRow = await pool.query('SELECT user_id FROM agent_applications WHERE id=$1', [req.params.id]);
@@ -2242,7 +2406,7 @@ app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), asyn
 // PAYMENT PREFERENCES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/payment-preferences/:userId', auth, async (req, res) => {
+app.get('/api/payment-preferences/:userId', auth, requirePaymentPrefsRead, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM payment_preferences WHERE user_id=$1', [req.params.userId]);
     res.json({ data: result.rows[0] || null });
@@ -2251,7 +2415,7 @@ app.get('/api/payment-preferences/:userId', auth, async (req, res) => {
   }
 });
 
-app.post('/api/payment-preferences', auth, async (req, res) => {
+app.post('/api/payment-preferences', auth, requirePerm('settings', 'setPaymentMethod'), async (req, res) => {
   try {
     const { preferredMethod, mtnPhone, airtelPhone, bankName, bankAccountNumber, bankAccountName } = req.body;
     const result = await pool.query(

@@ -68,106 +68,152 @@ export function perm(
 
 // ─── Data filters ─────────────────────────────────────────────────────────────
 /**
+ * When `user.restrictedDistricts` is non-empty (set by admin), the user may only
+ * see rows whose property `district` matches one entry (case-insensitive, trimmed).
+ */
+export function userMaySeeDistrict(user: User | null, district: string | undefined | null): boolean {
+  const list = user?.restrictedDistricts;
+  if (!list?.length) return true;
+  const d = (district ?? '').trim().toLowerCase();
+  if (!d) return false;
+  return list.some(a => String(a ?? '').trim().toLowerCase() === d);
+}
+
+/** Filter items with `propertyId` using districts from the full property list (typically the global store). */
+export function filterLinkedEntitiesByDistrict<T extends { propertyId?: string }>(
+  items: T[],
+  user: User | null,
+  allProperties: Property[]
+): T[] {
+  if (!user?.restrictedDistricts?.length || !allProperties.length) return items;
+  const byId = new Map(allProperties.map(p => [p.id, p]));
+  return items.filter(item => {
+    if (!item.propertyId) return false;
+    return userMaySeeDistrict(user, byId.get(item.propertyId)?.district);
+  });
+}
+
+/**
  * Property visibility rules:
  * - draft / pending_vetting / rejected → ONLY visible to the creator (managerId, landlordId)
  *   and to admin. Nobody else can see them.
  * - published / rented / under_maintenance → visible per role rules below.
+ * - Admin-assigned district restrictions apply after role rules (all signed-in roles).
  */
 export function filterPropertiesForUser(properties: Property[], user: User | null): Property[] {
   if (!user) {
-    // Unauthenticated visitors: only published
     return properties.filter(p => p.status === 'published');
   }
 
+  let visible: Property[];
   if (isAwaitingApproval(user)) {
-    return properties.filter(p =>
+    visible = properties.filter(p =>
       p.status === 'published' || p.status === 'rented' || p.status === 'under_maintenance'
     );
+  } else if (user.role === 'admin') {
+    visible = properties;
+  } else {
+    visible = properties.filter(p => {
+      const isPublicStatus = p.status === 'published' || p.status === 'rented' || p.status === 'under_maintenance';
+      const isCreator =
+        p.managerId === user.id ||
+        p.landlordId === user.id ||
+        (user.role === 'agent' && p.managerId === user.id);
+
+      if (!isPublicStatus) {
+        return isCreator;
+      }
+
+      switch (user.role) {
+        case 'property_manager':
+          return isPublicStatus || p.managerId === user.id;
+        case 'landlord':
+          return p.landlordId === user.id || isPublicStatus;
+        case 'tenant':
+          return p.status === 'published' || p.tenantId === user.id;
+        case 'agent':
+          return p.managerId === user.id || p.status === 'published';
+        case 'vendor':
+          return p.status === 'published';
+        default:
+          return p.status === 'published';
+      }
+    });
   }
 
-  // Admin sees everything
-  if (user.role === 'admin') return properties;
-
-  return properties.filter(p => {
-    const isPublicStatus = p.status === 'published' || p.status === 'rented' || p.status === 'under_maintenance';
-    const isCreator =
-      p.managerId === user.id ||
-      p.landlordId === user.id ||
-      (user.role === 'agent' && p.managerId === user.id);
-
-    // Non-public statuses: only the creator can see them
-    if (!isPublicStatus) {
-      return isCreator;
-    }
-
-    // Public statuses: apply role-based visibility
-    switch (user.role) {
-      case 'property_manager':
-        // Manager sees all public + their own drafts/pending
-        return isPublicStatus || p.managerId === user.id;
-      case 'landlord':
-        // Landlord sees their own properties (any status) + all published
-        return p.landlordId === user.id || isPublicStatus;
-      case 'tenant':
-        // Tenant sees published + their rented property
-        return p.status === 'published' || p.tenantId === user.id;
-      case 'agent':
-        // Agent sees their own listings (any status) + all published
-        return p.managerId === user.id || p.status === 'published';
-      case 'vendor':
-        return p.status === 'published';
-      default:
-        return p.status === 'published';
-    }
-  });
+  return visible.filter(p => userMaySeeDistrict(user, p.district));
 }
 
-export function filterPaymentsForUser(payments: Payment[], user: User | null): Payment[] {
+export function filterPaymentsForUser(
+  payments: Payment[],
+  user: User | null,
+  allProperties?: Property[]
+): Payment[] {
   if (!user) return [];
   if (isAwaitingApproval(user)) return [];
+  let rows: Payment[];
   switch (user.role) {
-    case 'admin':            return payments;
-    case 'property_manager': return payments.filter(p => p.propertyId && true);
-    case 'landlord':         return payments.filter(p => p.landlordId === user.id);
-    case 'tenant':           return payments.filter(p => p.tenantId === user.id);
-    default:                 return [];
+    case 'admin':            rows = payments; break;
+    case 'property_manager': rows = payments.filter(p => !!p.propertyId); break;
+    case 'landlord':         rows = payments.filter(p => p.landlordId === user.id); break;
+    case 'tenant':           rows = payments.filter(p => p.tenantId === user.id); break;
+    default:                 rows = [];
   }
+  return allProperties?.length ? filterLinkedEntitiesByDistrict(rows, user, allProperties) : rows;
 }
 
-export function filterMaintenanceForUser(requests: MaintenanceRequest[], user: User | null): MaintenanceRequest[] {
+export function filterMaintenanceForUser(
+  requests: MaintenanceRequest[],
+  user: User | null,
+  allProperties?: Property[]
+): MaintenanceRequest[] {
   if (!user) return [];
   if (isAwaitingApproval(user)) return [];
+  let rows: MaintenanceRequest[];
   switch (user.role) {
-    case 'admin':            return requests;
-    case 'property_manager': return requests;
-    case 'landlord':         return requests;
-    case 'tenant':           return requests.filter(r => r.tenantId === user.id);
-    case 'vendor':           return requests.filter(r => r.vendorId === user.id);
-    default:                 return [];
+    case 'admin':            rows = requests; break;
+    case 'property_manager': rows = requests; break;
+    case 'landlord':         rows = requests; break;
+    case 'tenant':           rows = requests.filter(r => r.tenantId === user.id); break;
+    case 'vendor':           rows = requests.filter(r => r.vendorId === user.id); break;
+    default:                 rows = [];
   }
+  return allProperties?.length ? filterLinkedEntitiesByDistrict(rows, user, allProperties) : rows;
 }
 
-export function filterInspectionsForUser(inspections: Inspection[], user: User | null): Inspection[] {
+export function filterInspectionsForUser(
+  inspections: Inspection[],
+  user: User | null,
+  allProperties?: Property[]
+): Inspection[] {
   if (!user) return [];
   if (isAwaitingApproval(user)) return [];
+  let rows: Inspection[];
   switch (user.role) {
-    case 'admin':            return inspections;
-    case 'property_manager': return inspections.filter(i => i.managerId === user.id);
-    case 'tenant':           return inspections.filter(i => i.tenantId === user.id);
-    case 'agent':            return inspections.filter(i => i.managerId === user.id);
-    default:                 return [];
+    case 'admin':            rows = inspections; break;
+    case 'property_manager': rows = inspections.filter(i => i.managerId === user.id); break;
+    case 'tenant':           rows = inspections.filter(i => i.tenantId === user.id); break;
+    case 'agent':            rows = inspections.filter(i => i.managerId === user.id); break;
+    default:                 rows = [];
   }
+  return allProperties?.length ? filterLinkedEntitiesByDistrict(rows, user, allProperties) : rows;
 }
 
-export function filterPayoutsForUser(payouts: Payout[], user: User | null): Payout[] {
+export function filterPayoutsForUser(
+  payouts: Payout[],
+  user: User | null,
+  allProperties?: Property[]
+): Payout[] {
   if (!user) return [];
   if (isAwaitingApproval(user)) return [];
+  let rows: Payout[];
   switch (user.role) {
-    case 'admin':            return payouts;
-    case 'property_manager': return payouts;
-    case 'landlord':         return payouts.filter(p => p.landlordId === user.id);
-    default:                 return [];
+    case 'admin':            rows = payouts; break;
+    case 'property_manager': rows = payouts; break;
+    case 'landlord':         rows = payouts.filter(p => p.landlordId === user.id); break;
+    default:                 rows = [];
   }
+  return allProperties?.length ? filterLinkedEntitiesByDistrict(rows, user, allProperties) : rows;
 }
 
 // ─── canDo helpers — backed by full permission system ─────────────────────────
