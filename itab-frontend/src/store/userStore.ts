@@ -77,12 +77,13 @@ interface UserStore {
   getPendingApprovals: () => User[];
   approveUser: (id: string, performedBy?: { id: string; name: string; role: string }) => void;
   rejectUserApproval: (id: string, reason: string, performedBy?: { id: string; name: string; role: string }) => void;
+  removeUser: (id: string) => void;
 
   // Audit logs
   addAuditLog: (log: Omit<AuditLog, 'id' | 'createdAt'>) => void;
 
   // Agent applications
-  submitAgentApplication: (app: Omit<AgentApplication, 'id' | 'status' | 'createdAt'>) => void;
+  submitAgentApplication: (app: Omit<AgentApplication, 'id' | 'status' | 'createdAt'> | AgentApplication) => void;
   approveAgentApplication: (id: string, adminNote: string, performedBy: { id: string; name: string; role: string }) => void;
   rejectAgentApplication: (id: string, adminNote: string, performedBy: { id: string; name: string; role: string }) => void;
 }
@@ -175,7 +176,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, kycStatus: 'approved', isVerified: true } : u
           ),
         }));
-        apiSend(() => usersApi.approve(id));
+        apiSend(() => usersApi.update(id, { kycStatus: 'approved' }));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -196,7 +197,7 @@ export const useUserStore = create<UserStore>()(
             u.id === id ? { ...u, kycStatus: 'rejected' } : u
           ),
         }));
-        apiSend(() => usersApi.rejectApproval(id, 'KYC rejected'));
+        apiSend(() => usersApi.update(id, { kycStatus: 'rejected' }));
         if (performedBy) {
           const target = get().users.find(u => u.id === id);
           get().addAuditLog({
@@ -311,6 +312,11 @@ export const useUserStore = create<UserStore>()(
         }
       },
 
+      removeUser: (id) => {
+        set(s => ({ users: s.users.filter(u => u.id !== id) }));
+        apiSend(() => usersApi.delete(id));
+      },
+
       addAuditLog: (log) => {
         const entry: AuditLog = {
           ...log,
@@ -331,13 +337,20 @@ export const useUserStore = create<UserStore>()(
       },
 
       submitAgentApplication: (app) => {
+        const base = app as Omit<AgentApplication, 'id' | 'status' | 'createdAt'> &
+          Partial<Pick<AgentApplication, 'id' | 'status' | 'createdAt'>>;
         const newApp: AgentApplication = {
-          ...app,
-          id: `app_${generateId()}`,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
+          ...base,
+          id: base.id ?? `app_${generateId()}`,
+          status: base.status ?? 'pending',
+          createdAt: base.createdAt ?? new Date().toISOString(),
         };
-        set(s => ({ agentApplications: [newApp, ...s.agentApplications] }));
+        set(s => ({
+          agentApplications: [
+            newApp,
+            ...s.agentApplications.filter(a => a.id !== newApp.id),
+          ],
+        }));
       },
 
       approveAgentApplication: (id, adminNote, performedBy) => {

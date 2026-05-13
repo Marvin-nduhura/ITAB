@@ -526,10 +526,10 @@ async function seedAgentApplications() {
     const [id,userId,fn,ln,email,phone,role,natId,exp,districts,motivation,status,adminNote,createdAt,reviewedAt] = r;
     await q(
       `INSERT INTO agent_applications (id,user_id,first_name,last_name,email,phone,role,
-       national_id_number,experience,districts,motivation,status,admin_note,created_at,reviewed_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       national_id_number,national_id_doc,additional_docs,experience,districts,motivation,status,admin_note,created_at,reviewed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13,$14,$15,$16,$17)
        ON CONFLICT (id) DO NOTHING`,
-      [id,userId,fn,ln,email,phone,role,natId,exp,JSON.stringify(districts),motivation,status,adminNote,createdAt,reviewedAt]
+      [id,userId,fn,ln,email,phone,role,natId,null,'[]',exp,JSON.stringify(districts),motivation,status,adminNote,createdAt,reviewedAt]
     );
   }
   console.log(`  ✅ ${rows.length} agent applications seeded.`);

@@ -33,10 +33,12 @@ api.interceptors.response.use(
 export const authApi = {
   login:         (data: { email: string; password: string }) => api.post<ApiResponse<{ token: string; user: unknown }>>('/auth/login', data),
   register:      (data: unknown) => api.post<ApiResponse<{ token: string; user: unknown }>>('/auth/register', data),
+  checkEmail:    (email: string) => api.get<ApiResponse<{ exists: boolean }>>('/auth/check-email', { params: { email } }),
   forgotPassword:(data: { email: string }) => api.post('/auth/forgot-password', data),
   resetPassword: (data: { token: string; password: string }) => api.post('/auth/reset-password', data),
   me:            () => api.get<ApiResponse<unknown>>('/auth/me'),
   updateProfile: (data: unknown) => api.put('/auth/profile', data),
+  deleteAccount: () => api.delete<ApiResponse<{ deleted: boolean }>>('/auth/account'),
 };
 
 // ─── Properties ──────────────────────────────────────────────────────────────
@@ -95,6 +97,7 @@ export const usersApi = {
   list:              (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/users', { params }),
   get:               (id: string) => api.get<ApiResponse<unknown>>(`/users/${id}`),
   update:            (id: string, data: unknown) => api.put(`/users/${id}`, data),
+  delete:            (id: string) => api.delete<ApiResponse<{ deleted: boolean }>>(`/users/${id}`),
   suspend:           (id: string, reason?: string) => api.patch(`/users/${id}/suspend`, { reason }),
   unsuspend:         (id: string) => api.patch(`/users/${id}/unsuspend`),
   approve:           (id: string) => api.patch(`/users/${id}/approve`),
@@ -107,7 +110,17 @@ export const usersApi = {
 
 // ─── Auth (extended) ─────────────────────────────────────────────────────────
 export const authGoogleApi = {
-  loginOrRegister: (data: { googleId: string; email: string; firstName: string; lastName: string; avatar?: string; role?: string }) =>
+  loginOrRegister: (data: {
+    googleId: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    avatar?: string;
+    role?: string;
+    phone?: string;
+    intent?: 'register' | 'login';
+    kycSubmitted?: boolean;
+  }) =>
     api.post<ApiResponse<{ user: unknown; token: string; requiresApproval: boolean }>>('/auth/google', data),
 };
 
@@ -203,8 +216,8 @@ export const auditLogsApi = {
 export const agentApplicationsApi = {
   list:    (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/agent-applications', { params }),
   submit:  (data: unknown) => api.post<ApiResponse<unknown>>('/agent-applications', data),
-  approve: (id: string, note?: string) => api.patch(`/agent-applications/${id}/approve`, { note }),
-  reject:  (id: string, note?: string) => api.patch(`/agent-applications/${id}/reject`, { note }),
+  approve: (id: string, adminNote?: string) => api.patch(`/agent-applications/${id}/approve`, { adminNote }),
+  reject:  (id: string, adminNote?: string) => api.patch(`/agent-applications/${id}/reject`, { adminNote }),
 };
 
 // ─── Payment Preferences ──────────────────────────────────────────────────────

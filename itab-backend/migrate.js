@@ -246,7 +246,8 @@ async function main() {
     id TEXT PRIMARY KEY,
     user_id TEXT, first_name TEXT, last_name TEXT,
     email TEXT, phone TEXT, role TEXT DEFAULT 'agent',
-    national_id_number TEXT, experience TEXT,
+    national_id_number TEXT, national_id_doc TEXT, additional_docs JSONB DEFAULT '[]'::jsonb,
+    experience TEXT,
     districts JSONB DEFAULT '[]', motivation TEXT,
     status TEXT DEFAULT 'pending', admin_note TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), reviewed_at TIMESTAMPTZ
@@ -258,6 +259,10 @@ async function main() {
     bank_name TEXT, bank_account_number TEXT, bank_account_name TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, 'payment_preferences table');
+
+  console.log('📝 Patching agent_applications...');
+  await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS national_id_doc TEXT`, 'agent_applications.national_id_doc');
+  await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS additional_docs JSONB DEFAULT '[]'::jsonb`, 'agent_applications.additional_docs');
 
   // ── 8. Indexes ─────────────────────────────────────────────────────────────
   console.log('📇 Creating indexes...');

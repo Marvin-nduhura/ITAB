@@ -14,7 +14,9 @@ import { FileUpload } from '../../components/ui/FileUpload';
 import type { UploadedFile } from '../../components/ui/FileUpload';
 import { useAuthStore } from '../../store/authStore';
 import { useUserStore } from '../../store/userStore';
-import { authApi, authGoogleApi } from '../../lib/api';
+import type { AgentApplication } from '../../store/userStore';
+import { authApi, authGoogleApi, agentApplicationsApi } from '../../lib/api';
+import type { User } from '../../types';
 import { DISTRICTS } from '../../lib/utils';
 import type { UserRole } from '../../types';
 
@@ -79,6 +81,8 @@ export function RegisterPage() {
   const [additionalDocs, setAdditionalDocs] = useState<UploadedFile[]>([]);
   const [appDistricts, setAppDistricts] = useState<string[]>([]);
   const [appLoading, setAppLoading] = useState(false);
+  /** Phone for Google sign-up (required on application step; not provided by Google OAuth). */
+  const [googleApplicationPhone, setGoogleApplicationPhone] = useState('');
 
   const {
     register: registerApp,
@@ -207,7 +211,16 @@ export function RegisterPage() {
   // ── Regular form submit ────────────────────────────────────────────────────
   const onSubmit = async (data: FormData) => {
     if (requiresApplication(data.role)) {
-      // Show application flow instead of registering immediately
+      try {
+        const check = await authApi.checkEmail(data.email);
+        const exists = (check.data as { data?: { exists?: boolean } }).data?.exists;
+        if (exists) {
+          toast.error('This email already has an account. Sign in or use a different email address.');
+          return;
+        }
+      } catch {
+        // Offline: continue; duplicate will surface when registering after the application step.
+      }
       setPendingFormData(data);
       setShowApplicationFlow(true);
       return;
@@ -240,8 +253,13 @@ export function RegisterPage() {
         const { user: backendUser, token } = (res.data as { data: { user: typeof newUser; token: string } }).data;
         setAuth(backendUser, token);
         addUser(backendUser);
-      } catch {
-        // Backend unavailable — use local
+      } catch (err: unknown) {
+        const ax = err as { response?: { status?: number; data?: { message?: string } } };
+        if (ax.response?.status === 409) {
+          toast.error(ax.response.data?.message || 'This email is already registered. Sign in instead.');
+          setLoading(false);
+          return;
+        }
         setAuth(newUser, `mock_token_${newUser.id}`);
         addUser(newUser);
       }
@@ -256,82 +274,99 @@ export function RegisterPage() {
     }
   };
 
-  // ── Application submit (for agent/property_manager) ────────────────────────
+  // ── Application submit (landlord / agent / property manager) ─────────────
   const onApplicationSubmit = async (appData: ApplicationData) => {
     if (nationalIdFiles.length === 0) {
       toast.error('Please upload your National ID photo');
       return;
     }
+    if (pendingGoogleUser) {
+      const ph = googleApplicationPhone.trim();
+      if (ph.length < 10) {
+        toast.error('Enter a valid phone number (required for this account type).');
+        return;
+      }
+    }
+
+    const docPayload = {
+      nationalIdNumber: appData.nationalId,
+      nationalIdDoc: nationalIdFiles[0]?.dataUrl,
+      additionalDocs: additionalDocs.map(f => ({
+        name: f.file?.name || 'document',
+        dataUrl: f.dataUrl,
+        type: f.file?.type || 'image',
+      })),
+      experience: appData.experience,
+      districts: appData.districts,
+      motivation: appData.motivation,
+    };
+
     setAppLoading(true);
     try {
       if (pendingFormData) {
-        // Email registration with application
-        const newUser = {
-          id:          `u_${Date.now()}`,
-          email:       pendingFormData.email,
-          phone:       pendingFormData.phone,
-          firstName:   pendingFormData.firstName,
-          lastName:    pendingFormData.lastName,
-          role:        pendingFormData.role as UserRole,
-          isVerified:  false,
-          isSuspended: false,
-          kycStatus:   'submitted' as const,
-          approvalStatus: 'pending' as const,
-          createdAt:   new Date().toISOString(),
-          updatedAt:   new Date().toISOString(),
-        };
-        addUser(newUser);
-        submitAgentApplication({
-          userId: newUser.id,
+        const reg = await authApi.register({
+          firstName: pendingFormData.firstName,
+          lastName: pendingFormData.lastName,
+          email: pendingFormData.email,
+          phone: pendingFormData.phone,
+          password: pendingFormData.password,
+          role: pendingFormData.role,
+          kycSubmitted: true,
+        });
+        const { user: created, token } = (reg.data as { data: { user: User; token: string } }).data;
+        setAuth(created, token);
+        addUser(created);
+
+        const appRes = await agentApplicationsApi.submit({
+          userId: created.id,
           firstName: pendingFormData.firstName,
           lastName: pendingFormData.lastName,
           email: pendingFormData.email,
           phone: pendingFormData.phone,
           role: pendingFormData.role,
-          nationalIdNumber: appData.nationalId,
-          nationalIdDoc: nationalIdFiles[0]?.dataUrl,
-          additionalDocs: additionalDocs.map(f => ({ name: f.file?.name || 'document', dataUrl: f.dataUrl, type: f.file?.type || 'image' })),
-          experience: appData.experience,
-          districts: appData.districts,
-          motivation: appData.motivation,
+          ...docPayload,
         });
+        const saved = appRes.data.data as AgentApplication;
+        submitAgentApplication(saved);
       } else if (pendingGoogleUser) {
-        // Google registration with application
-        const newUser = {
-          id:          `u_${Date.now()}`,
-          email:       pendingGoogleUser.email,
-          firstName:   pendingGoogleUser.firstName,
-          lastName:    pendingGoogleUser.lastName,
-          avatar:      pendingGoogleUser.avatar,
-          role:        pendingGoogleUser.role as UserRole,
-          isVerified:  false,
-          isSuspended: false,
-          kycStatus:   'submitted' as const,
-          approvalStatus: 'pending' as const,
-          googleId:    pendingGoogleUser.googleId,
-          createdAt:   new Date().toISOString(),
-          updatedAt:   new Date().toISOString(),
-        };
-        addUser(newUser);
-        submitAgentApplication({
-          userId: newUser.id,
+        const phone = googleApplicationPhone.trim();
+        const gRes = await authGoogleApi.loginOrRegister({
+          googleId: pendingGoogleUser.googleId,
+          email: pendingGoogleUser.email,
+          firstName: pendingGoogleUser.firstName,
+          lastName: pendingGoogleUser.lastName,
+          avatar: pendingGoogleUser.avatar,
+          role: pendingGoogleUser.role,
+          phone,
+          intent: 'register',
+          kycSubmitted: true,
+        });
+        const { user: created, token } = (gRes.data as { data: { user: User; token: string } }).data;
+        setAuth(created, token);
+        addUser(created);
+
+        const appRes = await agentApplicationsApi.submit({
+          userId: created.id,
           firstName: pendingGoogleUser.firstName,
           lastName: pendingGoogleUser.lastName,
           email: pendingGoogleUser.email,
-          phone: '',
+          phone,
           role: pendingGoogleUser.role,
-          nationalIdNumber: appData.nationalId,
-          nationalIdDoc: nationalIdFiles[0]?.dataUrl,
-          additionalDocs: additionalDocs.map(f => ({ name: f.file?.name || 'document', dataUrl: f.dataUrl, type: f.file?.type || 'image' })),
-          experience: appData.experience,
-          districts: appData.districts,
-          motivation: appData.motivation,
+          ...docPayload,
         });
+        const savedG = appRes.data.data as AgentApplication;
+        submitAgentApplication(savedG);
       }
 
       setApplicationSubmitted(true);
-    } catch {
-      toast.error('Application submission failed. Please try again.');
+      toast.success('Application submitted. An admin will review your documents.');
+    } catch (err: unknown) {
+      const ax = err as { response?: { status?: number; data?: { message?: string; code?: string } } };
+      if (ax.response?.status === 409) {
+        toast.error(ax.response.data?.message || 'This email already has an account. Sign in instead.');
+      } else {
+        toast.error(ax.response?.data?.message || 'Could not submit. Check your connection and try again.');
+      }
     } finally {
       setAppLoading(false);
     }
@@ -404,6 +439,16 @@ export function RegisterPage() {
                 </p>
               </div>
               <form onSubmit={handleAppSubmit(onApplicationSubmit)} className="space-y-5">
+                {pendingGoogleUser && (
+                  <Input
+                    label="Phone number *"
+                    type="tel"
+                    placeholder="+256 700 000 000"
+                    value={googleApplicationPhone}
+                    onChange={e => setGoogleApplicationPhone(e.target.value)}
+                    hint="Required for verification; Google does not share your phone number."
+                  />
+                )}
                 <Input
                   label="National ID Number *"
                   placeholder="e.g. CM90100012345ABCD"
@@ -524,7 +569,12 @@ export function RegisterPage() {
                     type="button"
                     variant="secondary"
                     className="flex-1"
-                    onClick={() => { setShowApplicationFlow(false); setPendingFormData(null); setPendingGoogleUser(null); }}
+                    onClick={() => {
+                      setShowApplicationFlow(false);
+                      setPendingFormData(null);
+                      setPendingGoogleUser(null);
+                      setGoogleApplicationPhone('');
+                    }}
                   >
                     Back
                   </Button>

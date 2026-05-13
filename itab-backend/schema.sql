@@ -411,6 +411,8 @@ CREATE TABLE IF NOT EXISTS agent_applications (
   phone             TEXT,
   role              TEXT DEFAULT 'agent',
   national_id_number TEXT,
+  national_id_doc   TEXT,
+  additional_docs   JSONB DEFAULT '[]',
   experience        TEXT,
   districts         JSONB DEFAULT '[]',
   motivation        TEXT,

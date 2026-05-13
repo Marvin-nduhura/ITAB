@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Briefcase, CheckCircle2, XCircle, MapPin, FileText, Image, Download, Eye, X } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
@@ -105,10 +105,21 @@ function DocThumb({ dataUrl, name, label, onClick }: { dataUrl?: string; name: s
 // ─── Main page ────────────────────────────────────────────────────────────────
 export function AgentApplicationsPage() {
   const { agentApplications, approveAgentApplication, rejectAgentApplication } = useUserStore();
-  const { agentApplications: backendApps } = useDataStore();
+  const { agentApplications: backendApps, setAgentApplications } = useDataStore();
   const { user } = useAuthStore();
-  // Use backend apps if available (synced from Render), fall back to store
-  const allApps = (backendApps.length > 0 ? backendApps : agentApplications) as AgentApplication[];
+
+  const allApps = useMemo(() => {
+    const map = new Map<string, AgentApplication>();
+    (backendApps as AgentApplication[]).forEach(raw => {
+      if (raw?.id) map.set(raw.id, raw);
+    });
+    agentApplications.forEach(a => {
+      if (a?.id && !map.has(a.id)) map.set(a.id, a);
+    });
+    return [...map.values()].sort(
+      (x, y) => new Date(y.createdAt || 0).getTime() - new Date(x.createdAt || 0).getTime()
+    );
+  }, [backendApps, agentApplications]);
   const [selected, setSelected] = useState<AgentApplication | null>(null);
   const [adminNote, setAdminNote] = useState('');
   const [loading, setLoading] = useState(false);
@@ -122,7 +133,17 @@ export function AgentApplicationsPage() {
     if (!adminNote.trim()) { toast.error('Add a note before approving'); return; }
     setLoading(true);
     try {
-      await agentApplicationsApi.approve(selected!.id, adminNote);
+      const res = await agentApplicationsApi.approve(selected!.id, adminNote);
+      const updated = (res.data as { data: AgentApplication }).data;
+      if (updated?.id) {
+        const { agentApplications: da } = useDataStore.getState();
+        const has = da.some(row => (row as AgentApplication).id === updated.id);
+        setAgentApplications(
+          has
+            ? da.map(row => ((row as AgentApplication).id === updated.id ? updated : row))
+            : [updated, ...da]
+        );
+      }
     } catch { /* offline */ }
     approveAgentApplication(selected!.id, adminNote, {
       id: user!.id, name: `${user!.firstName} ${user!.lastName}`, role: user!.role,
@@ -138,7 +159,17 @@ export function AgentApplicationsPage() {
     if (!adminNote.trim()) { toast.error('Provide a reason for rejection'); return; }
     setLoading(true);
     try {
-      await agentApplicationsApi.reject(selected!.id, adminNote);
+      const res = await agentApplicationsApi.reject(selected!.id, adminNote);
+      const updated = (res.data as { data: AgentApplication }).data;
+      if (updated?.id) {
+        const { agentApplications: da } = useDataStore.getState();
+        const has = da.some(row => (row as AgentApplication).id === updated.id);
+        setAgentApplications(
+          has
+            ? da.map(row => ((row as AgentApplication).id === updated.id ? updated : row))
+            : [updated, ...da]
+        );
+      }
     } catch { /* offline */ }
     rejectAgentApplication(selected!.id, adminNote, {
       id: user!.id, name: `${user!.firstName} ${user!.lastName}`, role: user!.role,

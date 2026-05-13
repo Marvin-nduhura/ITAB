@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { User, Bell, Shield, Moon, Sun, Monitor, Save, Download, CreditCard } from 'lucide-react';
+import { User, Bell, Shield, Moon, Sun, Monitor, Save, Download, CreditCard, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { useAuthStore } from '../store/authStore';
@@ -13,11 +14,13 @@ import { PaymentPreferences } from '../components/payment/PaymentPreferences';
 import toast from 'react-hot-toast';
 
 export function SettingsPage() {
-  const { user, updateUser } = useAuthStore();
+  const navigate = useNavigate();
+  const { user, updateUser, logout } = useAuthStore();
   const { theme, setTheme } = useUIStore();
   const { isInstalled, canInstall, platform } = usePWAInstall();
   const [tab, setTab] = useState<'profile' | 'notifications' | 'security' | 'appearance' | 'payments' | 'install'>('profile');
   const [loading, setLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [avatarFiles, setAvatarFiles] = useState<UploadedFile[]>([]);
   const [form, setForm] = useState({
     firstName: user?.firstName || '',
@@ -38,6 +41,21 @@ export function SettingsPage() {
       toast.success('Profile saved (will sync when online)');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!window.confirm('Permanently delete your ITAB account? This cannot be undone.')) return;
+    setDeleteLoading(true);
+    try {
+      await authApi.deleteAccount();
+      logout();
+      toast.success('Your account has been deleted.');
+      navigate('/login', { replace: true });
+    } catch {
+      toast.error('Could not delete your account. Try again or contact support.');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -152,6 +170,15 @@ export function SettingsPage() {
                 </div>
                 <Button size="sm" variant="secondary" onClick={() => toast.success('2FA enabled!')}>Enable</Button>
               </div>
+            </div>
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-700">
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100 mb-2">Delete account</h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+                Remove your profile from ITAB. You will be signed out immediately.
+              </p>
+              <Button variant="danger" loading={deleteLoading} icon={<Trash2 size={14} />} onClick={handleDeleteAccount}>
+                Delete my account
+              </Button>
             </div>
           </div>
         )}

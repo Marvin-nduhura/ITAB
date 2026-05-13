@@ -485,6 +485,14 @@ function formatContract(c) {
 
 function formatAgentApplication(a) {
   if (!a) return null;
+  let districts = a.districts || [];
+  if (typeof districts === 'string') {
+    try { districts = JSON.parse(districts); } catch { districts = []; }
+  }
+  let additionalDocs = a.additional_docs || [];
+  if (typeof additionalDocs === 'string') {
+    try { additionalDocs = JSON.parse(additionalDocs); } catch { additionalDocs = []; }
+  }
   return {
     id: a.id,
     userId: a.user_id,
@@ -494,14 +502,20 @@ function formatAgentApplication(a) {
     phone: a.phone,
     role: a.role,
     nationalIdNumber: a.national_id_number,
+    nationalIdDoc: a.national_id_doc || undefined,
+    additionalDocs,
     experience: a.experience,
-    districts: a.districts || [],
+    districts,
     motivation: a.motivation,
     status: a.status,
     adminNote: a.admin_note,
     createdAt: a.created_at,
     reviewedAt: a.reviewed_at,
   };
+}
+
+function rolesNeedingVetting(role) {
+  return ['landlord', 'agent', 'property_manager'].includes(role);
 }
 
 // ─── Health check ─────────────────────────────────────────────────────────────
@@ -512,23 +526,46 @@ app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().
 // AUTH ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+app.get('/api/auth/check-email', async (req, res) => {
+  try {
+    const email = (req.query.email || '').trim();
+    if (!email) return res.status(400).json({ message: 'Email is required' });
+    const existing = await pool.query('SELECT id FROM users WHERE lower(email) = lower($1)', [email]);
+    res.json({ data: { exists: existing.rows.length > 0 } });
+  } catch (err) {
+    console.error('check-email error:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { firstName, lastName, email, phone, password, role } = req.body;
+    const { firstName, lastName, email, phone, password, role, kycSubmitted } = req.body;
     if (!firstName || !lastName || !email || !password) {
       return res.status(400).json({ message: 'All fields required' });
     }
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0) return res.status(409).json({ message: 'Email already registered' });
+    const existing = await pool.query('SELECT id FROM users WHERE lower(email) = lower($1)', [email]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({
+        message: 'An account with this email already exists. Sign in instead.',
+        code: 'EMAIL_EXISTS',
+      });
+    }
 
     const hash = await bcrypt.hash(password, 12);
     const id = uuidv4();
-    const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor'];
+    const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor', 'property_manager'];
     const assignedRole = allowedRoles.includes(role) ? role : 'tenant';
+    const vetting = rolesNeedingVetting(assignedRole);
+    const kycFromBody = !!kycSubmitted;
+    const kycStatus = vetting && kycFromBody ? 'submitted' : vetting ? 'pending' : 'pending';
+    const approvalStatus = vetting ? 'pending' : 'approved';
+    const isVerified = !vetting;
+
     const result = await pool.query(
       `INSERT INTO users (id, first_name, last_name, email, phone, password_hash, role, kyc_status, is_verified, is_suspended, approval_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',false,false,'pending') RETURNING *`,
-      [id, firstName, lastName, email, phone || null, hash, assignedRole]
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,$10) RETURNING *`,
+      [id, firstName, lastName, email, phone || null, hash, assignedRole, kycStatus, isVerified, approvalStatus]
     );
     const user = formatUser(result.rows[0]);
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
@@ -605,29 +642,47 @@ app.post('/api/auth/reset-password', async (req, res) => {
 // Google OAuth
 app.post('/api/auth/google', async (req, res) => {
   try {
-    const { googleId, email, firstName, lastName, avatar, role } = req.body;
+    const {
+      googleId, email, firstName, lastName, avatar, role, phone, intent, kycSubmitted,
+    } = req.body;
     if (!email) return res.status(400).json({ message: 'Email is required' });
 
-    let result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    let result = await pool.query('SELECT * FROM users WHERE lower(email) = lower($1)', [email]);
     let user;
     let requiresApproval = false;
 
     if (result.rows.length > 0) {
+      if (intent === 'register') {
+        return res.status(409).json({
+          message: 'An account with this email already exists. Sign in with Google or use email login.',
+          code: 'EMAIL_EXISTS',
+        });
+      }
       user = result.rows[0];
-      // Update google_id if not set
       if (!user.google_id) {
         await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, user.id]);
         user.google_id = googleId;
       }
+      if (phone && String(phone).trim()) {
+        const phoneUp = await pool.query(
+          'UPDATE users SET phone=$1, updated_at=NOW() WHERE id=$2 RETURNING *',
+          [String(phone).trim(), user.id]
+        );
+        user = phoneUp.rows[0];
+      }
     } else {
       const id = uuidv4();
-      const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor'];
+      const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor', 'property_manager'];
       const assignedRole = allowedRoles.includes(role) ? role : 'tenant';
-      requiresApproval = ['agent', 'landlord'].includes(assignedRole);
+      requiresApproval = rolesNeedingVetting(assignedRole);
+      const vetting = requiresApproval;
+      const kycStatus = vetting && kycSubmitted ? 'submitted' : vetting ? 'pending' : 'pending';
+      const approvalStatus = vetting ? 'pending' : 'approved';
+      const isVerified = !vetting;
       const insertResult = await pool.query(
-        `INSERT INTO users (id, first_name, last_name, email, google_id, avatar, role, kyc_status, is_verified, is_suspended, approval_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',true,false,$8) RETURNING *`,
-        [id, firstName, lastName, email, googleId, avatar, assignedRole, requiresApproval ? 'pending' : 'approved']
+        `INSERT INTO users (id, first_name, last_name, email, phone, google_id, avatar, role, kyc_status, is_verified, is_suspended, approval_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,$11) RETURNING *`,
+        [id, firstName, lastName, email, phone ? String(phone).trim() || null : null, googleId, avatar, assignedRole, kycStatus, isVerified, approvalStatus]
       );
       user = insertResult.rows[0];
     }
@@ -635,6 +690,8 @@ app.post('/api/auth/google', async (req, res) => {
     if (user.is_suspended) {
       return res.status(403).json({ message: 'Account suspended', code: 'ACCOUNT_SUSPENDED' });
     }
+
+    requiresApproval = user.approval_status === 'pending';
 
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ data: { user: formatUser(user), token, requiresApproval } });
@@ -685,13 +742,27 @@ app.get('/api/users/:id', auth, async (req, res) => {
 
 app.put('/api/users/:id', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { firstName, lastName, phone, role, notes } = req.body;
+    const {
+      firstName, lastName, phone, role, notes, kycStatus, approvalStatus,
+    } = req.body;
+    const allowedKyc = ['pending', 'submitted', 'approved', 'rejected'];
+    const kycVal = allowedKyc.includes(kycStatus) ? kycStatus : null;
+    const apprVal = ['pending', 'approved', 'rejected'].includes(approvalStatus) ? approvalStatus : null;
     const result = await pool.query(
-      `UPDATE users SET first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name),
-       phone=COALESCE($3,phone), role=COALESCE($4,role), notes=COALESCE($5,notes), updated_at=NOW()
-       WHERE id=$6 RETURNING *`,
-      [firstName, lastName, phone, role, notes, req.params.id]
+      `UPDATE users SET
+         first_name=COALESCE($1,first_name),
+         last_name=COALESCE($2,last_name),
+         phone=COALESCE($3,phone),
+         role=COALESCE($4,role),
+         notes=COALESCE($5,notes),
+         kyc_status=COALESCE($6,kyc_status),
+         approval_status=COALESCE($7,approval_status),
+         is_verified=CASE WHEN $6::text IS NOT NULL AND $6::text = 'approved' THEN true WHEN $6::text IS NOT NULL AND $6::text = 'rejected' THEN false ELSE is_verified END,
+         updated_at=NOW()
+       WHERE id=$8 RETURNING *`,
+      [firstName, lastName, phone, role, notes, kycVal, apprVal, req.params.id]
     );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -789,6 +860,30 @@ app.patch('/api/users/:id/role', auth, requireRole('admin'), async (req, res) =>
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.delete('/api/auth/account', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM users WHERE id = $1', [req.user.id]);
+    res.json({ data: { deleted: true } });
+  } catch (err) {
+    console.error('delete account error:', err);
+    res.status(500).json({ message: err.message || 'Could not delete account. Try again or contact support.' });
+  }
+});
+
+app.delete('/api/users/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    if (req.params.id === req.user.id) {
+      return res.status(400).json({ message: 'You cannot delete your own admin account from this screen. Use Settings if self-delete is enabled.' });
+    }
+    const del = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [req.params.id]);
+    if (del.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+    res.json({ data: { deleted: true } });
+  } catch (err) {
+    console.error('admin delete user error:', err);
+    res.status(500).json({ message: err.message || 'Could not delete user' });
   }
 });
 
@@ -2019,14 +2114,19 @@ app.get('/api/agent-applications', auth, requireRole('admin'), async (req, res) 
 
 app.post('/api/agent-applications', async (req, res) => {
   try {
-    const { userId, firstName, lastName, email, phone, role, nationalIdNumber, experience, districts, motivation } = req.body;
+    const {
+      userId, firstName, lastName, email, phone, role, nationalIdNumber,
+      nationalIdDoc, additionalDocs, experience, districts, motivation,
+    } = req.body;
     const id = uuidv4();
     const result = await pool.query(
       `INSERT INTO agent_applications (id, user_id, first_name, last_name, email, phone, role,
-       national_id_number, experience, districts, motivation, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') RETURNING *`,
-      [id, userId || null, firstName, lastName, email, phone, role || 'agent',
-       nationalIdNumber || null, experience, JSON.stringify(districts || []), motivation]
+       national_id_number, national_id_doc, additional_docs, experience, districts, motivation, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13,'pending') RETURNING *`,
+      [id, userId || null, firstName, lastName, email, phone || null, role || 'agent',
+       nationalIdNumber || null, nationalIdDoc || null,
+       JSON.stringify(Array.isArray(additionalDocs) ? additionalDocs : []),
+       experience, JSON.stringify(districts || []), motivation]
     );
     res.status(201).json({ data: formatAgentApplication(result.rows[0]) });
   } catch (err) {
@@ -2037,11 +2137,20 @@ app.post('/api/agent-applications', async (req, res) => {
 
 app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { adminNote } = req.body;
+    const adminNote = req.body.adminNote ?? req.body.note ?? '';
+    const appRow = await pool.query('SELECT user_id FROM agent_applications WHERE id=$1', [req.params.id]);
     const result = await pool.query(
       "UPDATE agent_applications SET status='approved', admin_note=$1, reviewed_at=NOW() WHERE id=$2 RETURNING *",
-      [adminNote || '', req.params.id]
+      [adminNote, req.params.id]
     );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Application not found' });
+    const uid = appRow.rows[0]?.user_id;
+    if (uid) {
+      await pool.query(
+        `UPDATE users SET approval_status='approved', kyc_status='approved', is_verified=true, updated_at=NOW() WHERE id=$1`,
+        [uid]
+      ).catch(() => {});
+    }
     res.json({ data: formatAgentApplication(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
@@ -2050,11 +2159,20 @@ app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), asy
 
 app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), async (req, res) => {
   try {
-    const { adminNote } = req.body;
+    const adminNote = req.body.adminNote ?? req.body.note ?? '';
+    const appRow = await pool.query('SELECT user_id FROM agent_applications WHERE id=$1', [req.params.id]);
     const result = await pool.query(
       "UPDATE agent_applications SET status='rejected', admin_note=$1, reviewed_at=NOW() WHERE id=$2 RETURNING *",
-      [adminNote || '', req.params.id]
+      [adminNote, req.params.id]
     );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Application not found' });
+    const uid = appRow.rows[0]?.user_id;
+    if (uid) {
+      await pool.query(
+        `UPDATE users SET approval_status='rejected', kyc_status='rejected', updated_at=NOW() WHERE id=$1`,
+        [uid]
+      ).catch(() => {});
+    }
     res.json({ data: formatAgentApplication(result.rows[0]) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });

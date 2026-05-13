@@ -76,19 +76,9 @@ function PermissionSection({
 }
 
 export function UsersPage() {
-  const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC, updateUserPermissions, updateUserDistricts, changeUserRole, getPendingApprovals, approveUser, rejectUserApproval, updateUser } = useUserStore();
+  const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC, updateUserPermissions, updateUserDistricts, changeUserRole, getPendingApprovals, approveUser, rejectUserApproval, updateUser, removeUser } = useUserStore();
   const { user } = useAuthStore();
 
-  // Hard guard — only admin can manage users
-  if (!isAdmin(user)) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] gap-3">
-        <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-2xl flex items-center justify-center text-3xl">🚫</div>
-        <p className="font-semibold text-slate-700 dark:text-slate-300">Access Denied</p>
-        <p className="text-sm text-slate-400">Only administrators can manage users.</p>
-      </div>
-    );
-  }
   const [search, setSearch] = useState('');
   const [filterRole, setFilterRole] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
@@ -109,6 +99,9 @@ export function UsersPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<User | null>(null);
+  const [editKycStatus, setEditKycStatus] = useState<User['kycStatus']>('pending');
+  const [editApprovalStatus, setEditApprovalStatus] = useState<NonNullable<User['approvalStatus']>>('approved');
+  const [deleteUserLoading, setDeleteUserLoading] = useState(false);
 
   // Invite modal state
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -123,6 +116,16 @@ export function UsersPage() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
   const [inviteSent, setInviteSent] = useState(false);
+
+  if (!isAdmin(user)) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-3">
+        <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-2xl flex items-center justify-center text-3xl">🚫</div>
+        <p className="font-semibold text-slate-700 dark:text-slate-300">Access Denied</p>
+        <p className="text-sm text-slate-400">Only administrators can manage users.</p>
+      </div>
+    );
+  }
 
   const filtered = users.filter(u => {
     const q = search.toLowerCase();
@@ -181,6 +184,8 @@ export function UsersPage() {
     setEditRole(u.role);
     setEditPermissions(u.permissions || resolvePermissions(u.role));
     setEditDistricts(u.restrictedDistricts || []);
+    setEditKycStatus(u.kycStatus);
+    setEditApprovalStatus(u.approvalStatus || 'approved');
   };
 
   const handleSavePermissions = async () => {
@@ -250,6 +255,47 @@ export function UsersPage() {
     setRejectReason('');
     setRejectTarget(null);
     setDetailLoading(false);
+  };
+
+  const handleSaveAccountStatus = async () => {
+    if (!detailUser) return;
+    setDetailLoading(true);
+    try {
+      await usersApi.update(detailUser.id, { kycStatus: editKycStatus, approvalStatus: editApprovalStatus });
+    } catch { /* backend unavailable */ }
+    updateUser(detailUser.id, {
+      kycStatus: editKycStatus,
+      approvalStatus: editApprovalStatus,
+      isVerified: editKycStatus === 'approved',
+    });
+    setDetailUser(prev => prev ? {
+      ...prev,
+      kycStatus: editKycStatus,
+      approvalStatus: editApprovalStatus,
+      isVerified: editKycStatus === 'approved',
+    } : null);
+    toast.success('KYC / approval status saved');
+    setDetailLoading(false);
+  };
+
+  const handleDeleteUser = async () => {
+    if (!detailUser || detailUser.role === 'admin') {
+      toast.error('Cannot delete admin accounts');
+      return;
+    }
+    if (detailUser.id === user?.id) {
+      toast.error('Use Settings to delete your own account');
+      return;
+    }
+    if (!window.confirm(`Permanently delete ${detailUser.firstName} ${detailUser.lastName}? This cannot be undone.`)) return;
+    setDeleteUserLoading(true);
+    try {
+      await usersApi.delete(detailUser.id);
+    } catch { /* backend unavailable */ }
+    removeUser(detailUser.id);
+    setDetailUser(null);
+    toast.success('User deleted');
+    setDeleteUserLoading(false);
   };
 
   const handleResetPermissions = () => {
@@ -638,6 +684,42 @@ export function UsersPage() {
                     </Button>
                   )
                 )}
+                <div className="space-y-3 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+                  <p className="text-xs font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wide">KYC & approval (all roles)</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Select
+                      label="KYC status"
+                      value={editKycStatus}
+                      onChange={e => setEditKycStatus(e.target.value as User['kycStatus'])}
+                      options={[
+                        { value: 'pending', label: 'Pending' },
+                        { value: 'submitted', label: 'Submitted' },
+                        { value: 'approved', label: 'Approved' },
+                        { value: 'rejected', label: 'Rejected' },
+                      ]}
+                    />
+                    <Select
+                      label="Approval status"
+                      value={editApprovalStatus}
+                      onChange={e => setEditApprovalStatus(e.target.value as NonNullable<User['approvalStatus']>)}
+                      options={[
+                        { value: 'pending', label: 'Pending' },
+                        { value: 'approved', label: 'Approved' },
+                        { value: 'rejected', label: 'Rejected' },
+                      ]}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="secondary" loading={detailLoading} onClick={handleSaveAccountStatus}>
+                      Save KYC / approval
+                    </Button>
+                    {detailUser.id !== user?.id && detailUser.role !== 'admin' && (
+                      <Button variant="danger" size="sm" loading={deleteUserLoading} icon={<UserX size={14} />} onClick={handleDeleteUser}>
+                        Delete user
+                      </Button>
+                    )}
+                  </div>
+                </div>
                 <div>
                   <Textarea label="Admin Notes" placeholder="Add private notes about this user..."
                     value={editNotes} onChange={e => setEditNotes(e.target.value)} rows={3} />

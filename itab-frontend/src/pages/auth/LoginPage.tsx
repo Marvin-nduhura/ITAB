@@ -62,10 +62,6 @@ export function LoginPage() {
             avatar: googleUser.picture,
           });
           const { user, token, requiresApproval } = backendRes.data.data;
-          if (requiresApproval) {
-            toast('Your account is pending approval. Please wait for admin review.', { icon: '⏳', duration: 6000 });
-            return;
-          }
           const typedUser = user as Parameters<typeof setAuth>[0];
           const suspensionCheck = isSuspended(typedUser.email);
           if (suspensionCheck.suspended) {
@@ -73,11 +69,20 @@ export function LoginPage() {
             return;
           }
           setAuth(typedUser, token);
-          toast.success(`Welcome back, ${typedUser.firstName}! 👋`);
+          if (requiresApproval) {
+            toast('Your account is pending admin approval. You can sign in, but some features stay limited until you are approved.', { icon: '⏳', duration: 6000 });
+          } else {
+            toast.success(`Welcome back, ${typedUser.firstName}! 👋`);
+          }
           navigate('/dashboard');
           return;
-        } catch {
-          // Backend unavailable — fall through to register redirect
+        } catch (gErr: unknown) {
+          const ax = gErr as { response?: { status?: number; data?: { message?: string } } };
+          if (ax.response) {
+            toast.error(ax.response.data?.message || 'Google sign-in failed. Please try again.');
+            return;
+          }
+          // Network error — fall through to register redirect
         }
 
         // Backend unavailable — redirect new Google users to register
