@@ -123,7 +123,4 @@ export function sleep(ms: number): Promise<void> {
 }
 
 export const INSPECTION_FEE = 100_000;
-export const DISTRICTS = [
-  'Kampala', 'Wakiso', 'Mukono', 'Entebbe', 'Jinja', 'Mbarara',
-  'Gulu', 'Lira', 'Mbale', 'Masaka', 'Fort Portal', 'Arua',
-];
+export { DISTRICTS, formatDistrictName, isKnownDistrict } from './districts';
