@@ -96,6 +96,7 @@ export function PropertyFormModal({ open, onClose, editProperty }: Props) {
           addCustomAmenity, addCustomPropertyType, addCustomDistrict } = usePropertyStore();
 
   const isEdit = !!editProperty;
+  const allowCustomTypeDistrict = user?.role !== 'agent';
   const [form, setForm] = useState<FormState>(() => editProperty ? formFromProperty(editProperty) : EMPTY_FORM);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [step, setStep] = useState(1);
@@ -211,10 +212,19 @@ export function PropertyFormModal({ open, onClose, editProperty }: Props) {
       itabFeePercent: parseFloat(form.itabFeePercent) || 2,
       isFeatured: form.isFeatured,
       tourUrl: form.tourUrl.trim() || undefined,
-      managerId: user?.role === 'property_manager' ? user.id : undefined,
-      managerName: user?.role === 'property_manager' ? `${user.firstName} ${user.lastName}` : undefined,
+      managerId:
+        user?.role === 'property_manager' || user?.role === 'agent'
+          ? user.id
+          : undefined,
+      managerName:
+        user?.role === 'property_manager' || user?.role === 'agent'
+          ? `${user.firstName} ${user.lastName}`
+          : undefined,
       landlordId: user?.role === 'landlord' ? user.id : undefined,
       landlordName: user?.role === 'landlord' ? `${user.firstName} ${user.lastName}` : undefined,
+      createdById: user?.id,
+      createdByName: user ? `${user.firstName} ${user.lastName}`.trim() : undefined,
+      createdByRole: user?.role,
     };
 
     if (isEdit && editProperty) {
@@ -298,10 +308,10 @@ export function PropertyFormModal({ open, onClose, editProperty }: Props) {
                   <select value={form.type} onChange={e => set('type', e.target.value)}
                     className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm">
                     {allTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}</option>)}
-                    <option value="other">+ Other (custom)</option>
+                    {allowCustomTypeDistrict && <option value="other">+ Other (custom)</option>}
                   </select>
                 </div>
-                {form.type === 'other' && (
+                {allowCustomTypeDistrict && form.type === 'other' && (
                   <div className="flex gap-2 mt-2">
                     <Input placeholder="Enter custom property type" value={form.customType}
                       onChange={e => set('customType', e.target.value)}
@@ -319,9 +329,9 @@ export function PropertyFormModal({ open, onClose, editProperty }: Props) {
                 <select value={form.district} onChange={e => set('district', e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-primary-500 text-sm">
                   {allDistricts.map(d => <option key={d} value={d}>{d}</option>)}
-                  <option value="other">+ Other (custom)</option>
+                  {allowCustomTypeDistrict && <option value="other">+ Other (custom)</option>}
                 </select>
-                {form.district === 'other' && (
+                {allowCustomTypeDistrict && form.district === 'other' && (
                   <div className="flex gap-2 mt-2">
                     <Input placeholder="Enter district name" value={form.customDistrict}
                       onChange={e => set('customDistrict', e.target.value)}

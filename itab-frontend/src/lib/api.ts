@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ApiResponse } from '../types';
+import type { ApiResponse, PropertyLocationConflict } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -49,7 +49,16 @@ export const propertiesApi = {
   update:  (id: string, data: unknown) => api.put<ApiResponse<unknown>>(`/properties/${id}`, data),
   delete:  (id: string) => api.delete(`/properties/${id}`),
   feature: (id: string) => api.patch(`/properties/${id}/feature`),
+  assignManager: (id: string, data: { managerId: string | null; managerName?: string }) =>
+    api.patch<ApiResponse<unknown>>(`/properties/${id}/manager`, data),
   uploadPhotos: (id: string, files: FormData) => api.post(`/properties/${id}/photos`, files, { headers: { 'Content-Type': 'multipart/form-data' } }),
+};
+
+export const propertyConflictsApi = {
+  list: (status?: string) =>
+    api.get<ApiResponse<PropertyLocationConflict[]>>('/property-conflicts', { params: status ? { status } : {} }),
+  resolve: (id: string, data: { status: 'confirmed_duplicate' | 'not_duplicate'; adminNotes?: string }) =>
+    api.patch<ApiResponse<PropertyLocationConflict>>(`/property-conflicts/${id}`, data),
 };
 
 // ─── Inspections ─────────────────────────────────────────────────────────────

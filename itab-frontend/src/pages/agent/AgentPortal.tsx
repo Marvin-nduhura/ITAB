@@ -26,8 +26,9 @@ export function AgentPortal() {
   const transactions = usePaymentStore(s => s.transactions);
 
   const myProperties = properties.filter(p =>
+    p.createdById === user?.id ||
     p.managerId === user?.id ||
-    (!p.managerId && p.id.startsWith('p_'))
+    (!p.managerId && p.createdById === user?.id)
   );
 
   const unassignedPool = properties.filter(p => !p.managerId && p.status !== 'rejected');

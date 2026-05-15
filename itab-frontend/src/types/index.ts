@@ -62,12 +62,30 @@ export interface Property {
   tourUrl?: string;           // YouTube URL for virtual tour
   managerId?: string;
   managerName?: string;
+  createdById?: string;
+  createdByName?: string;
+  createdByRole?: string;
   landlordId?: string;
   landlordName?: string;
   tenantId?: string;
   leaseStart?: string;
   leaseEnd?: string;
   viewCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PropertyLocationConflict {
+  id: string;
+  propertyIds: string[];
+  latitude: number;
+  longitude: number;
+  minDistanceMeters: number;
+  reason: 'exact_pin' | 'proximity' | string;
+  status: 'pending' | 'confirmed_duplicate' | 'not_duplicate';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  adminNotes?: string;
   createdAt: string;
   updatedAt: string;
 }

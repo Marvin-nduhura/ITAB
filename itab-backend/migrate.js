@@ -54,6 +54,15 @@ async function main() {
   await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS lease_start DATE`, 'properties.lease_start');
   await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS lease_end DATE`, 'properties.lease_end');
   await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`, 'properties.updated_at');
+  await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS created_by_id TEXT`, 'properties.created_by_id');
+  await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS created_by_name TEXT`, 'properties.created_by_name');
+  await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS created_by_role TEXT`, 'properties.created_by_role');
+  await run(
+    `UPDATE properties SET created_by_id = COALESCE(created_by_id, manager_id, landlord_id),
+     created_by_name = COALESCE(created_by_name, manager_name, landlord_name)
+     WHERE created_by_id IS NULL AND (manager_id IS NOT NULL OR landlord_id IS NOT NULL)`,
+    'properties.created_by backfill'
+  );
 
   // ── 3. Patch existing inspections table ───────────────────────────────────
   console.log('🔍 Patching inspections table...');
@@ -267,6 +276,21 @@ async function main() {
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`, 'platform_settings table');
   await run(`INSERT INTO platform_settings (id, fee_config, company_accounts) VALUES ('global', '{}'::jsonb, '{}'::jsonb) ON CONFLICT (id) DO NOTHING`, 'platform_settings seed');
+
+  await run(`CREATE TABLE IF NOT EXISTS property_location_conflicts (
+    id TEXT PRIMARY KEY,
+    property_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    latitude NUMERIC(10,7),
+    longitude NUMERIC(10,7),
+    min_distance_meters NUMERIC(10,2),
+    reason TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reviewed_by TEXT,
+    reviewed_at TIMESTAMPTZ,
+    admin_notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'property_location_conflicts table');
 
   console.log('📝 Patching agent_applications...');
   await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS national_id_doc TEXT`, 'agent_applications.national_id_doc');

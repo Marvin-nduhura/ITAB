@@ -11,7 +11,10 @@ import { useAuthStore } from '../store/authStore';
 import { usePropertyStore } from '../store/propertyStore';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { formatCurrency, propertyStatusConfig, amenityIcons, INSPECTION_FEE } from '../lib/utils';
-import { canDo } from '../lib/rbac';
+import { canDo, filterPropertiesForUser } from '../lib/rbac';
+import { useUserStore } from '../store/userStore';
+import { propertiesApi } from '../lib/api';
+import { Select } from '../components/ui/Input';
 import toast from 'react-hot-toast';
 import { GoogleMap, useJsApiLoader, Marker, Circle } from '@react-google-maps/api';
 
@@ -24,6 +27,9 @@ export function PropertyDetailPage() {
   const { user } = useAuthStore();
   // ── ALL hooks must be called before any conditional return ──────────────
   const { properties, updateProperty } = usePropertyStore();
+  const { users } = useUserStore();
+  const [assignManagerId, setAssignManagerId] = useState('');
+  const [assignSaving, setAssignSaving] = useState(false);
   const { position, status: geoStatus, getLocation } = useGeolocation();
   const { isLoaded: mapsLoaded } = useJsApiLoader({ googleMapsApiKey: GOOGLE_MAPS_API_KEY });
   const [photoIdx, setPhotoIdx] = useState(0);
@@ -48,7 +54,21 @@ export function PropertyDetailPage() {
   const [vettingLoading, setVettingLoading] = useState(false);
 
   // ── Now safe to do conditional logic ────────────────────────────────────
-  const property = properties.find(p => p.id === id);
+  const propertyRaw = properties.find(p => p.id === id);
+  const property = propertyRaw && user
+    ? filterPropertiesForUser([propertyRaw], user)[0]
+    : propertyRaw && !user && propertyRaw.status === 'published'
+      ? propertyRaw
+      : undefined;
+
+  const managers = users.filter(u => u.role === 'property_manager' && !u.isSuspended);
+  const canAssignManager = canDo.assignPropertyManager(user);
+  const addedByLabel =
+    property?.createdByName ||
+    property?.managerName ||
+    property?.landlordName ||
+    'Unknown';
+
   if (!property) return (
     <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
       <div className="w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-2xl flex items-center justify-center text-3xl">🏠</div>
@@ -64,10 +84,49 @@ export function PropertyDetailPage() {
   const isDraft = property.status === 'draft';
   const isOwner = user && (
     user.role === 'admin' ||
+    property.createdById === user.id ||
     (user.role === 'property_manager' && (property.managerId === user.id || !property.managerId)) ||
     (user.role === 'landlord' && (property.landlordId === user.id || !property.landlordId)) ||
-    (user.role === 'agent' && (property.managerId === user.id || !property.managerId))
+    (user.role === 'agent' && (property.createdById === user.id || property.managerId === user.id))
   );
+
+  const handleAssignManager = async () => {
+    if (!assignManagerId) {
+      toast.error('Select a property manager');
+      return;
+    }
+    const mgr = managers.find(m => m.id === assignManagerId);
+    if (!mgr) return;
+    setAssignSaving(true);
+    try {
+      await propertiesApi.assignManager(property.id, {
+        managerId: mgr.id,
+        managerName: `${mgr.firstName} ${mgr.lastName}`,
+      });
+      updateProperty(property.id, {
+        managerId: mgr.id,
+        managerName: `${mgr.firstName} ${mgr.lastName}`,
+      });
+      toast.success(`Assigned to ${mgr.firstName} ${mgr.lastName}`);
+    } catch {
+      toast.error('Could not assign manager');
+    } finally {
+      setAssignSaving(false);
+    }
+  };
+
+  const handleClearManager = async () => {
+    setAssignSaving(true);
+    try {
+      await propertiesApi.assignManager(property.id, { managerId: null });
+      updateProperty(property.id, { managerId: undefined, managerName: undefined });
+      toast.success('Manager assignment removed');
+    } catch {
+      toast.error('Could not update manager');
+    } finally {
+      setAssignSaving(false);
+    }
+  };
 
   const handleApprove = async () => {
     if (!allChecked) { toast.error('Complete all vetting checks before approving'); return; }
@@ -335,6 +394,33 @@ export function PropertyDetailPage() {
                 <div className="flex items-center gap-1 mt-1 text-slate-400 text-sm">
                   <MapPin size={14} /><span>{property.address}, {property.district}</span>
                 </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Added by <span className="font-medium text-slate-700 dark:text-slate-300">{addedByLabel}</span>
+                  {property.createdByRole && (
+                    <span className="text-slate-400"> · {String(property.createdByRole).replace(/_/g, ' ')}</span>
+                  )}
+                </p>
+                {property.managerName && (
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Assigned manager: <span className="font-medium">{property.managerName}</span>
+                  </p>
+                )}
+                {canAssignManager && (
+                  <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 space-y-2">
+                    <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">Change property manager</p>
+                    <Select
+                      options={[{ value: '', label: 'Select manager…' }, ...managers.map(m => ({ value: m.id, label: `${m.firstName} ${m.lastName}` }))]}
+                      value={assignManagerId || property.managerId || ''}
+                      onChange={e => setAssignManagerId(e.target.value)}
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" loading={assignSaving} onClick={handleAssignManager}>Save manager</Button>
+                      {property.managerId && (
+                        <Button size="sm" variant="secondary" loading={assignSaving} onClick={handleClearManager}>Remove</Button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="flex gap-2 flex-shrink-0">
                 <button onClick={toggleFavorite} className="w-9 h-9 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">

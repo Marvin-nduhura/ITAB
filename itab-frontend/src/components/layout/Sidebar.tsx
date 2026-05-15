@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Search, Calendar, CreditCard, Wrench,
   Users, BarChart3, MessageSquare, Bell, Settings, LogOut, X,
   Home, DollarSign, FileText, Star, Briefcase,
-  Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen, Building2, Shield,
+  Megaphone, Scale, Percent, UserCheck, Wallet, Calculator, ClipboardCheck, FolderOpen, Building2, Shield, MapPin,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
@@ -32,6 +32,7 @@ const navItems: NavItem[] = [
   // "Users & KYC" = manage all users, suspend/unsuspend, approve KYC
   { to: '/users',              icon: <Users size={18} />,           label: 'Users & KYC',          roles: ['admin'] },
   { to: '/admin/vetting',      icon: <ClipboardCheck size={18} />,  label: 'Vetting Queue',        roles: ['admin'] },
+  { to: '/admin/property-conflicts', icon: <MapPin size={18} />, label: 'Location Conflicts', roles: ['admin'] },
   { to: '/admin/fees',         icon: <Percent size={18} />,         label: 'Fee Configuration',    roles: ['admin'] },
   { to: '/admin/unassigned',   icon: <UserCheck size={18} />,       label: 'Unassigned Properties',roles: ['admin'] },
   { to: '/admin/disputes',     icon: <Scale size={18} />,           label: 'Disputes',             roles: ['admin'] },

@@ -280,8 +280,116 @@ function formatUser(u) {
   };
 }
 
+const PUBLIC_PROPERTY_STATUSES = ['published', 'rented', 'under_maintenance'];
+const DRAFT_LIKE_STATUSES = ['draft', 'pending_vetting', 'rejected'];
+const DUPE_RADIUS_METERS = 50;
+const COORD_ROUND_DECIMALS = 5;
+
+function roundCoord(n, decimals = COORD_ROUND_DECIMALS) {
+  const x = parseFloat(n);
+  if (!Number.isFinite(x)) return null;
+  const f = 10 ** decimals;
+  return Math.round(x * f) / f;
+}
+
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Optional JWT — sets req.user or leaves null (for public property browse). */
+async function optionalAuth(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    req.user = null;
+    req.dbUserForPerms = null;
+    req.effectivePermissions = null;
+    return next();
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const result = await pool.query(
+      `SELECT id, role, approval_status, permissions, is_suspended, first_name, last_name, restricted_districts
+       FROM users WHERE id = $1`,
+      [decoded.id]
+    );
+    if (!result.rows.length || result.rows[0].is_suspended) {
+      req.user = null;
+      return next();
+    }
+    const row = result.rows[0];
+    const displayName = [row.first_name, row.last_name].filter(Boolean).join(' ') || 'User';
+    req.user = { id: row.id, role: row.role, name: displayName };
+    req.dbUserForPerms = row;
+    req.effectivePermissions = getEffectivePermissions(row);
+    next();
+  } catch {
+    req.user = null;
+    next();
+  }
+}
+
+function propertyCreatorId(p) {
+  return p.created_by_id || p.manager_id || p.landlord_id || null;
+}
+
+function userMaySeeDistrict(req, district) {
+  const list = req.dbUserForPerms?.restricted_districts;
+  if (!list || (Array.isArray(list) && list.length === 0)) return true;
+  const districts = Array.isArray(list) ? list : parseDbJson(list, []) || [];
+  const d = String(district ?? '').trim().toLowerCase();
+  if (!d) return false;
+  return districts.some((a) => String(a ?? '').trim().toLowerCase() === d);
+}
+
+/** Mirrors frontend filterPropertiesForUser — enforce on API responses. */
+function canUserViewProperty(user, p) {
+  const status = p.status;
+  const isPublic = PUBLIC_PROPERTY_STATUSES.includes(status);
+  const creatorId = propertyCreatorId(p);
+
+  if (!user) {
+    return status === 'published';
+  }
+  if (user.role === 'admin') return true;
+
+  const isCreator =
+    (p.created_by_id && p.created_by_id === user.id) ||
+    p.landlord_id === user.id ||
+    (p.manager_id === user.id && ['agent', 'property_manager'].includes(user.role));
+
+  if (DRAFT_LIKE_STATUSES.includes(status)) {
+    return isCreator;
+  }
+
+  if (!isPublic) return isCreator;
+
+  switch (user.role) {
+    case 'property_manager':
+      return isPublic || p.manager_id === user.id;
+    case 'landlord':
+      return p.landlord_id === user.id || isPublic;
+    case 'tenant':
+      return status === 'published' || p.tenant_id === user.id;
+    case 'agent':
+      return p.manager_id === user.id || status === 'published';
+    case 'vendor':
+      return status === 'published';
+    default:
+      return status === 'published';
+  }
+}
+
 function formatProperty(p) {
   if (!p) return null;
+  const createdById = p.created_by_id || p.manager_id || p.landlord_id || null;
+  const createdByName = p.created_by_name || p.manager_name || p.landlord_name || null;
   return {
     id: p.id,
     title: p.title,
@@ -312,9 +420,128 @@ function formatProperty(p) {
     leaseStart: p.lease_start,
     leaseEnd: p.lease_end,
     viewCount: p.view_count || 0,
+    createdById,
+    createdByName,
+    createdByRole: p.created_by_role || null,
     createdAt: p.created_at,
     updatedAt: p.updated_at,
   };
+}
+
+function formatPropertyConflict(row) {
+  if (!row) return null;
+  let ids = row.property_ids;
+  if (typeof ids === 'string') {
+    try { ids = JSON.parse(ids); } catch { ids = []; }
+  }
+  return {
+    id: row.id,
+    propertyIds: ids || [],
+    latitude: parseFloat(row.latitude) || 0,
+    longitude: parseFloat(row.longitude) || 0,
+    minDistanceMeters: parseFloat(row.min_distance_meters) || 0,
+    reason: row.reason,
+    status: row.status,
+    reviewedBy: row.reviewed_by,
+    reviewedAt: row.reviewed_at,
+    adminNotes: row.admin_notes,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function resolveManagerFields(managerId, managerName) {
+  if (!managerId) return { managerId: null, managerName: managerName || null };
+  if (managerName) return { managerId, managerName };
+  const r = await pool.query(
+    'SELECT first_name, last_name FROM users WHERE id = $1 AND role = $2',
+    [managerId, 'property_manager']
+  );
+  if (!r.rows.length) return { managerId, managerName: managerName || null };
+  const u = r.rows[0];
+  return { managerId, managerName: `${u.first_name || ''} ${u.last_name || ''}`.trim() };
+}
+
+async function scanPropertyLocationConflicts(propertyId) {
+  try {
+    const cur = await pool.query('SELECT * FROM properties WHERE id = $1', [propertyId]);
+    if (!cur.rows.length) return;
+    const p = cur.rows[0];
+    const lat = parseFloat(p.latitude);
+    const lng = parseFloat(p.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    const others = await pool.query(
+      `SELECT id, latitude, longitude, title, status FROM properties
+       WHERE id != $1 AND status != 'rejected'`,
+      [propertyId]
+    );
+
+    const rLat = roundCoord(lat);
+    const rLng = roundCoord(lng);
+    const matches = [];
+    let minDist = null;
+    let reason = 'proximity';
+
+    for (const o of others.rows) {
+      const oLat = parseFloat(o.latitude);
+      const oLng = parseFloat(o.longitude);
+      if (!Number.isFinite(oLat) || !Number.isFinite(oLng)) continue;
+      const exact = roundCoord(oLat) === rLat && roundCoord(oLng) === rLng;
+      const dist = haversineMeters(lat, lng, oLat, oLng);
+      if (exact || dist < DUPE_RADIUS_METERS) {
+        matches.push(o.id);
+        if (minDist === null || dist < minDist) minDist = exact ? 0 : dist;
+        if (exact) reason = 'exact_pin';
+      }
+    }
+    if (!matches.length) return;
+
+    const allIds = [propertyId, ...matches].sort();
+    const existing = await pool.query(
+      `SELECT * FROM property_location_conflicts
+       WHERE status = 'pending' AND property_ids @> $1::jsonb`,
+      [JSON.stringify([propertyId])]
+    );
+
+    let conflictId;
+    if (existing.rows.length) {
+      conflictId = existing.rows[0].id;
+      const prevIds = parseDbJson(existing.rows[0].property_ids, []);
+      const merged = [...new Set([...prevIds, ...allIds])];
+      await pool.query(
+        `UPDATE property_location_conflicts SET
+           property_ids = $1::jsonb, latitude = $2, longitude = $3,
+           min_distance_meters = $4, reason = $5, updated_at = NOW()
+         WHERE id = $6`,
+        [JSON.stringify(merged), lat, lng, minDist ?? 0, reason, conflictId]
+      );
+    } else {
+      conflictId = uuidv4();
+      await pool.query(
+        `INSERT INTO property_location_conflicts
+         (id, property_ids, latitude, longitude, min_distance_meters, reason, status)
+         VALUES ($1, $2::jsonb, $3, $4, $5, $6, 'pending')`,
+        [conflictId, JSON.stringify(allIds), lat, lng, minDist ?? 0, reason]
+      );
+    }
+
+    const admins = await pool.query(`SELECT id FROM users WHERE role = 'admin' AND is_suspended = false`);
+    for (const a of admins.rows) {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+         VALUES ($1, $2, 'property_duplicate', $3, $4, false, '/admin/property-conflicts')`,
+        [
+          uuidv4(),
+          a.id,
+          'Possible duplicate property location',
+          `${allIds.length} listings share the same or very close map pin. Review in Location Conflicts.`,
+        ]
+      ).catch(() => {});
+    }
+  } catch (e) {
+    console.error('scanPropertyLocationConflicts:', e.message);
+  }
 }
 
 function formatInspection(i) {
@@ -1085,7 +1312,7 @@ app.delete('/api/users/:id', auth, requireRole('admin'), requirePerm('userManage
 // PROPERTIES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/properties', async (req, res) => {
+app.get('/api/properties', optionalAuth, async (req, res) => {
   try {
     const { search, type, status, district, minPrice, maxPrice, bedrooms } = req.query;
     let query = 'SELECT * FROM properties WHERE 1=1';
@@ -1100,19 +1327,31 @@ app.get('/api/properties', async (req, res) => {
     if (bedrooms) { query += ` AND bedrooms >= $${i}`; params.push(Number(bedrooms)); i++; }
     query += ' ORDER BY created_at DESC';
     const result = await pool.query(query, params);
-    res.json({ data: result.rows.map(formatProperty) });
+    const rows = result.rows
+      .filter((row) => canUserViewProperty(req.user, row))
+      .filter((row) => userMaySeeDistrict(req, row.district));
+    res.json({ data: rows.map(formatProperty) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-app.get('/api/properties/:id', async (req, res) => {
+app.get('/api/properties/:id', optionalAuth, async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM properties WHERE id = $1', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
-    await pool.query('UPDATE properties SET view_count = view_count + 1 WHERE id = $1', [req.params.id]).catch(() => {});
-    res.json({ data: formatProperty(result.rows[0]) });
+    const row = result.rows[0];
+    if (!canUserViewProperty(req.user, row)) {
+      return res.status(404).json({ message: 'Property not found' });
+    }
+    if (!userMaySeeDistrict(req, row.district)) {
+      return res.status(404).json({ message: 'Property not found' });
+    }
+    if (req.user && PUBLIC_PROPERTY_STATUSES.includes(row.status)) {
+      await pool.query('UPDATE properties SET view_count = view_count + 1 WHERE id = $1', [req.params.id]).catch(() => {});
+    }
+    res.json({ data: formatProperty(row) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -1124,29 +1363,63 @@ app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agen
       title, description, type, address, district, latitude, longitude,
       bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
       amenities, managementFeePercent, itabFeePercent, photos, tourUrl,
-      landlordId, landlordName,
+      landlordId, landlordName, managerId: bodyManagerId, managerName: bodyManagerName,
+      status: bodyStatus,
     } = req.body;
     if (!(await assertDistrictAllowedForUser(req.user.id, district, res))) return;
+
+    const role = req.user.role;
+    let managerId = null;
+    let managerName = null;
+    let landlordIdVal = landlordId || null;
+    let landlordNameVal = landlordName || null;
+
+    if (role === 'property_manager') {
+      managerId = req.user.id;
+      managerName = req.user.name;
+    } else if (role === 'agent') {
+      managerId = req.user.id;
+      managerName = req.user.name;
+    } else if (role === 'landlord') {
+      landlordIdVal = req.user.id;
+      landlordNameVal = req.user.name;
+    } else if (role === 'admin') {
+      if (bodyManagerId) {
+        const resolved = await resolveManagerFields(bodyManagerId, bodyManagerName);
+        managerId = resolved.managerId;
+        managerName = resolved.managerName;
+      }
+    }
+
+    const initialStatus =
+      bodyStatus && ['draft', 'pending_vetting', 'published'].includes(bodyStatus)
+        ? bodyStatus
+        : role === 'property_manager'
+          ? 'published'
+          : 'draft';
+
     const id = uuidv4();
     const result = await pool.query(
       `INSERT INTO properties (id, title, description, type, status, address, district, latitude, longitude,
        bedrooms, bathrooms, square_footage, rent_price, deposit, available_from, amenities, photos,
        management_fee_percent, itab_fee_percent, manager_id, manager_name, landlord_id, landlord_name,
-       tour_url, is_featured, view_count)
-       VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,false,0) RETURNING *`,
+       created_by_id, created_by_name, created_by_role, tour_url, is_featured, view_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,false,0) RETURNING *`,
       [
-        id, title, description, type, address, district,
+        id, title, description, type, initialStatus, address, district,
         latitude || 0.3476, longitude || 32.5825,
         bedrooms || 0, bathrooms || 0, squareFootage || null,
         rentPrice, deposit, availableFrom,
         JSON.stringify(amenities || []),
         JSON.stringify(photos || []),
         managementFeePercent || 10, itabFeePercent || 2,
-        req.user.id, null,
-        landlordId || null, landlordName || null,
+        managerId, managerName,
+        landlordIdVal, landlordNameVal,
+        req.user.id, req.user.name, role,
         tourUrl || null,
       ]
     );
+    await scanPropertyLocationConflicts(id);
     res.status(201).json({ data: formatProperty(result.rows[0]) });
   } catch (err) {
     console.error(err);
@@ -1158,17 +1431,39 @@ app.put('/api/properties/:id', auth, requirePerm('properties', 'editProperty'), 
   try {
     const existing = await pool.query('SELECT * FROM properties WHERE id=$1', [req.params.id]);
     if (existing.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    if (!canUserViewProperty(req.user, existing.rows[0])) {
+      return res.status(403).json({ message: 'Not allowed to edit this property' });
+    }
     const {
       title, description, type, address, district, latitude, longitude,
       bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
       amenities, photos, status, managementFeePercent, itabFeePercent,
       isFeatured, tourUrl, landlordId, landlordName, tenantId, leaseStart, leaseEnd,
+      managerId: bodyManagerId, managerName: bodyManagerName,
     } = req.body;
     const effDistrict =
       district !== undefined && district !== null && district !== ''
         ? district
         : existing.rows[0].district;
     if (!(await assertDistrictAllowedForUser(req.user.id, effDistrict, res))) return;
+
+    let managerId = existing.rows[0].manager_id;
+    let managerName = existing.rows[0].manager_name;
+    if (
+      bodyManagerId !== undefined &&
+      req.user.role === 'admin' &&
+      hasPermission(req.effectivePermissions, 'properties', 'assignPropertyToManager')
+    ) {
+      if (bodyManagerId === null || bodyManagerId === '') {
+        managerId = null;
+        managerName = null;
+      } else {
+        const resolved = await resolveManagerFields(bodyManagerId, bodyManagerName);
+        managerId = resolved.managerId;
+        managerName = resolved.managerName;
+      }
+    }
+
     const result = await pool.query(
       `UPDATE properties SET
         title=COALESCE($1,title), description=COALESCE($2,description), type=COALESCE($3,type),
@@ -1183,8 +1478,9 @@ app.put('/api/properties/:id', auth, requirePerm('properties', 'editProperty'), 
         tour_url=COALESCE($20,tour_url), landlord_id=COALESCE($21,landlord_id),
         landlord_name=COALESCE($22,landlord_name), tenant_id=COALESCE($23,tenant_id),
         lease_start=COALESCE($24,lease_start), lease_end=COALESCE($25,lease_end),
+        manager_id=$26, manager_name=$27,
         updated_at=NOW()
-       WHERE id=$26 RETURNING *`,
+       WHERE id=$28 RETURNING *`,
       [
         title, description, type, address, district, latitude, longitude,
         bedrooms, bathrooms, squareFootage, rentPrice, deposit, availableFrom,
@@ -1192,11 +1488,75 @@ app.put('/api/properties/:id', auth, requirePerm('properties', 'editProperty'), 
         photos ? JSON.stringify(photos) : null,
         status, managementFeePercent, itabFeePercent, isFeatured, tourUrl,
         landlordId, landlordName, tenantId, leaseStart, leaseEnd,
+        managerId, managerName,
         req.params.id,
       ]
     );
     if (result.rows.length === 0) return res.status(404).json({ message: 'Property not found' });
+    await scanPropertyLocationConflicts(req.params.id);
     res.json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/properties/:id/manager', auth, requireRole('admin'), requirePerm('properties', 'assignPropertyToManager'), async (req, res) => {
+  try {
+    const { managerId, managerName } = req.body;
+    const existing = await pool.query('SELECT * FROM properties WHERE id=$1', [req.params.id]);
+    if (!existing.rows.length) return res.status(404).json({ message: 'Property not found' });
+
+    let nextManagerId = null;
+    let nextManagerName = null;
+    if (managerId) {
+      const resolved = await resolveManagerFields(managerId, managerName);
+      nextManagerId = resolved.managerId;
+      nextManagerName = resolved.managerName;
+    }
+
+    const result = await pool.query(
+      `UPDATE properties SET manager_id=$1, manager_name=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
+      [nextManagerId, nextManagerName, req.params.id]
+    );
+    res.json({ data: formatProperty(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/property-conflicts', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const status = req.query.status || 'pending';
+    const result = await pool.query(
+      `SELECT * FROM property_location_conflicts
+       WHERE ($1 = 'all' OR status = $1)
+       ORDER BY created_at DESC`,
+      [status]
+    );
+    res.json({ data: result.rows.map(formatPropertyConflict) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.patch('/api/property-conflicts/:id', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { status, adminNotes } = req.body;
+    if (!['confirmed_duplicate', 'not_duplicate'].includes(status)) {
+      return res.status(400).json({ message: 'status must be confirmed_duplicate or not_duplicate' });
+    }
+    const result = await pool.query(
+      `UPDATE property_location_conflicts SET
+         status=$1, admin_notes=COALESCE($2, admin_notes),
+         reviewed_by=$3, reviewed_at=NOW(), updated_at=NOW()
+       WHERE id=$4 RETURNING *`,
+      [status, adminNotes || null, req.user.id, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ message: 'Conflict not found' });
+    res.json({ data: formatPropertyConflict(result.rows[0]) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });

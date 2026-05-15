@@ -39,6 +39,7 @@ const AdminDisputes     = lazy(() => import('./pages/admin/AdminDisputes').then(
 const AdminAnnouncements= lazy(() => import('./pages/admin/AdminAnnouncements').then(m => ({ default: m.AdminAnnouncements })));
 const UnassignedProperties = lazy(() => import('./pages/admin/UnassignedProperties').then(m => ({ default: m.UnassignedProperties })));
 const VettingQueue      = lazy(() => import('./pages/admin/VettingQueue').then(m => ({ default: m.VettingQueue })));
+const PropertyLocationConflicts = lazy(() => import('./pages/admin/PropertyLocationConflicts').then(m => ({ default: m.PropertyLocationConflicts })));
 const VendorsPage       = lazy(() => import('./pages/VendorsPage').then(m => ({ default: m.VendorsPage })));
 const VendorPortal      = lazy(() => import('./pages/vendor/VendorPortal').then(m => ({ default: m.VendorPortal })));
 const TransactionsPage  = lazy(() => import('./pages/TransactionsPage').then(m => ({ default: m.TransactionsPage })));
@@ -153,6 +154,7 @@ export default function App() {
               <Route path="/admin/announcements"  element={<RoleRoute path="/admin/announcements"><AdminAnnouncements /></RoleRoute>} />
               <Route path="/admin/unassigned"     element={<RoleRoute path="/admin/unassigned"><UnassignedProperties /></RoleRoute>} />
               <Route path="/admin/vetting"        element={<RoleRoute path="/admin/vetting"><VettingQueue /></RoleRoute>} />
+              <Route path="/admin/property-conflicts" element={<RoleRoute path="/admin/property-conflicts"><PropertyLocationConflicts /></RoleRoute>} />
               <Route path="/admin/audit"          element={<RoleRoute path="/admin/audit"><AuditLogsPage /></RoleRoute>} />
               <Route path="/admin/agents"         element={<RoleRoute path="/admin/agents"><AgentApplicationsPage /></RoleRoute>} />
               <Route path="/vendors"              element={<RoleRoute path="/vendors"><VendorsPage /></RoleRoute>} />

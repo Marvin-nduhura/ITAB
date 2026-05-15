@@ -95,8 +95,7 @@ export function filterLinkedEntitiesByDistrict<T extends { propertyId?: string }
 
 /**
  * Property visibility rules:
- * - draft / pending_vetting / rejected → ONLY visible to the creator (managerId, landlordId)
- *   and to admin. Nobody else can see them.
+ * - draft / pending_vetting / rejected → ONLY visible to the creator (createdById) and admin.
  * - published / rented / under_maintenance → visible per role rules below.
  * - Admin-assigned district restrictions apply after role rules (all signed-in roles).
  */
@@ -116,9 +115,9 @@ export function filterPropertiesForUser(properties: Property[], user: User | nul
     visible = properties.filter(p => {
       const isPublicStatus = p.status === 'published' || p.status === 'rented' || p.status === 'under_maintenance';
       const isCreator =
-        p.managerId === user.id ||
+        p.createdById === user.id ||
         p.landlordId === user.id ||
-        (user.role === 'agent' && p.managerId === user.id);
+        (p.managerId === user.id && (user.role === 'agent' || user.role === 'property_manager'));
 
       if (!isPublicStatus) {
         return isCreator;
@@ -225,13 +224,14 @@ export const canDo = {
     if (!p || is(u, 'admin')) return true;
     if (is(u, 'property_manager')) return p.managerId === u.id || !p.managerId;
     if (is(u, 'landlord'))         return p.landlordId === u.id;
-    if (is(u, 'agent'))            return p.managerId === u.id || (!p.managerId && p.id.startsWith('p_'));
+    if (is(u, 'agent'))            return p.createdById === u.id || p.managerId === u.id || (!p.managerId && p.id.startsWith('p_'));
     return false;
   },
   deleteProperty:  (u: User | null, p?: Property) => canDo.editProperty(u, p),
   publishProperty: (u: User | null) => perm(u, 'properties', 'publishProperty'),
   vetProperty:     (u: User | null) => perm(u, 'admin', 'approveProperty') || perm(u, 'admin', 'rejectProperty'),
   featureProperty: (u: User | null) => perm(u, 'properties', 'featureProperty'),
+  assignPropertyManager: (u: User | null) => perm(u, 'properties', 'assignPropertyToManager'),
 
   // Users
   manageUsers:     (u: User | null) => perm(u, 'userManagement', 'viewUsers'),
@@ -326,6 +326,7 @@ export const routeRoles: Record<string, UserRole[]> = {
   '/admin/unassigned':    ['admin'],
   '/admin/vetting':       ['admin', 'property_manager'],
   '/admin/audit':         ['admin'],
+  '/admin/property-conflicts': ['admin'],
   '/admin/agents':        ['admin'],
   '/disputes':            ['admin', 'property_manager', 'landlord', 'tenant', 'agent', 'vendor'],
   '/landlord':            ['landlord'],

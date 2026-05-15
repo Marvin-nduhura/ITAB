@@ -58,6 +58,25 @@ CREATE TABLE IF NOT EXISTS properties (
   lease_start           DATE,
   lease_end             DATE,
   view_count            INTEGER DEFAULT 0,
+  created_by_id         TEXT,
+  created_by_name       TEXT,
+  created_by_role       TEXT,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Possible duplicate listings (same / very close map pin)
+CREATE TABLE IF NOT EXISTS property_location_conflicts (
+  id                    TEXT PRIMARY KEY,
+  property_ids          JSONB NOT NULL DEFAULT '[]',
+  latitude              NUMERIC(10,7),
+  longitude             NUMERIC(10,7),
+  min_distance_meters   NUMERIC(10,2),
+  reason                TEXT,
+  status                TEXT NOT NULL DEFAULT 'pending',
+  reviewed_by           TEXT,
+  reviewed_at           TIMESTAMPTZ,
+  admin_notes           TEXT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

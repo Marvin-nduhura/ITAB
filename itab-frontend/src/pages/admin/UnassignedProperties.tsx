@@ -6,6 +6,7 @@ import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
+import { propertiesApi } from '../../lib/api';
 import { useUserStore } from '../../store/userStore';
 import { formatCurrency } from '../../lib/utils';
 import toast from 'react-hot-toast';
@@ -20,18 +21,26 @@ export function UnassignedProperties() {
   const unassigned = properties.filter(p => !p.managerId && p.status !== 'rejected');
   const managers = users.filter(u => u.role === 'property_manager');
 
-  const handleAssign = () => {
+  const handleAssign = async () => {
     if (!selected || !assignTo) { toast.error('Select a manager'); return; }
     const manager = managers.find(m => m.id === assignTo);
     if (!manager) return;
-    updateProperty(selected, {
-      managerId: manager.id,
-      managerName: `${manager.firstName} ${manager.lastName}`,
-      status: 'pending_vetting',
-    });
-    setSelected(null);
-    setAssignTo('');
-    toast.success(`Property assigned to ${manager.firstName} ${manager.lastName}!`);
+    try {
+      await propertiesApi.assignManager(selected, {
+        managerId: manager.id,
+        managerName: `${manager.firstName} ${manager.lastName}`,
+      });
+      updateProperty(selected, {
+        managerId: manager.id,
+        managerName: `${manager.firstName} ${manager.lastName}`,
+        status: 'pending_vetting',
+      });
+      setSelected(null);
+      setAssignTo('');
+      toast.success(`Property assigned to ${manager.firstName} ${manager.lastName}!`);
+    } catch {
+      toast.error('Could not assign manager on server');
+    }
   };
 
   const selectedProp = properties.find(p => p.id === selected);
