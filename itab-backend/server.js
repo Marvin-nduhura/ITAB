@@ -1108,6 +1108,18 @@ app.post('/api/auth/google', async (req, res) => {
         user = phoneUp.rows[0];
       }
     } else {
+      // No account found — if this is a sign-in attempt (not explicit register), reject so
+      // the frontend can redirect the user to the registration page.
+      if (intent !== 'register') {
+        return res.status(404).json({
+          message: 'No account found for this Google account. Please sign up first.',
+          code: 'ACCOUNT_NOT_FOUND',
+          email,
+          firstName,
+          lastName,
+        });
+      }
+
       const id = uuidv4();
       const allowedRoles = ['tenant', 'landlord', 'agent', 'vendor', 'property_manager'];
       const assignedRole = allowedRoles.includes(role) ? role : 'tenant';
@@ -2834,6 +2846,35 @@ app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), requ
     }
     res.json({ data: formatAgentApplication(result.rows[0]) });
   } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Admin replaces/adds documents on an application (e.g. after rejection, user re-submits via admin)
+app.patch('/api/agent-applications/:id/docs', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const { nationalIdDoc, additionalDocs } = req.body;
+    const updates = [];
+    const params = [];
+    let i = 1;
+    if (nationalIdDoc !== undefined) {
+      updates.push(`national_id_doc = $${i}`); params.push(nationalIdDoc); i++;
+    }
+    if (additionalDocs !== undefined) {
+      updates.push(`additional_docs = $${i}::jsonb`);
+      params.push(JSON.stringify(Array.isArray(additionalDocs) ? additionalDocs : []));
+      i++;
+    }
+    if (updates.length === 0) return res.status(400).json({ message: 'No fields to update' });
+    params.push(req.params.id);
+    const result = await pool.query(
+      `UPDATE agent_applications SET ${updates.join(', ')} WHERE id = $${i} RETURNING *`,
+      params
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Application not found' });
+    res.json({ data: formatAgentApplication(result.rows[0]) });
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 });

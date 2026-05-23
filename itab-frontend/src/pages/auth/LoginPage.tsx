@@ -52,7 +52,7 @@ export function LoginPage() {
         });
         const googleUser = await res.json();
 
-        // Try backend first
+        // Try backend — sign-in only (no intent:'register')
         try {
           const backendRes = await authGoogleApi.loginOrRegister({
             googleId: googleUser.sub,
@@ -60,6 +60,7 @@ export function LoginPage() {
             firstName: googleUser.given_name || '',
             lastName: googleUser.family_name || '',
             avatar: googleUser.picture,
+            // No intent field → backend treats this as sign-in only
           });
           const { user, token, requiresApproval } = backendRes.data.data;
           const typedUser = user as Parameters<typeof setAuth>[0];
@@ -77,17 +78,27 @@ export function LoginPage() {
           navigate('/dashboard');
           return;
         } catch (gErr: unknown) {
-          const ax = gErr as { response?: { status?: number; data?: { message?: string } } };
+          const ax = gErr as { response?: { status?: number; data?: { code?: string; message?: string; email?: string; firstName?: string; lastName?: string } } };
+          if (ax.response?.status === 404 && ax.response?.data?.code === 'ACCOUNT_NOT_FOUND') {
+            // No account — send to registration with Google data pre-filled
+            const { email: gEmail, firstName: gFirst, lastName: gLast } = ax.response.data;
+            navigate(
+              `/register?google=1` +
+              `&email=${encodeURIComponent(gEmail || googleUser.email)}` +
+              `&firstName=${encodeURIComponent(gFirst || googleUser.given_name || '')}` +
+              `&lastName=${encodeURIComponent(gLast || googleUser.family_name || '')}`
+            );
+            toast('No account found. Please choose your role to sign up.', { icon: '👋', duration: 5000 });
+            return;
+          }
           if (ax.response) {
             toast.error(ax.response.data?.message || 'Google sign-in failed. Please try again.');
             return;
           }
-          // Network error — fall through to register redirect
+          // Network error — redirect to register as fallback
+          navigate(`/register?google=1&email=${encodeURIComponent(googleUser.email)}&firstName=${encodeURIComponent(googleUser.given_name || '')}&lastName=${encodeURIComponent(googleUser.family_name || '')}`);
+          toast('Could not connect. Please sign up or try again.', { icon: '👋', duration: 5000 });
         }
-
-        // Backend unavailable — redirect new Google users to register
-        navigate(`/register?google=1&email=${encodeURIComponent(googleUser.email)}&firstName=${encodeURIComponent(googleUser.given_name || '')}&lastName=${encodeURIComponent(googleUser.family_name || '')}`);
-        toast(`New to ITAB? Please choose your role to complete sign-up.`, { icon: '👋', duration: 5000 });
       } catch {
         toast.error('Google sign-in failed. Please try again.');
       } finally {
@@ -103,7 +114,7 @@ export function LoginPage() {
   const onSubmit = async (data: FormData) => {
     setLoading(true);
     try {
-      // Try backend first
+      // Try backend
       try {
         const res = await authApi.login({ email: data.email, password: data.password });
         const { user, token } = (res.data as { data: { user: Parameters<typeof setAuth>[0]; token: string } }).data;
@@ -121,7 +132,7 @@ export function LoginPage() {
         navigate('/dashboard');
         return;
       } catch (backendErr: unknown) {
-        const err = backendErr as { response?: { status?: number; data?: { code?: string; reason?: string } } };
+        const err = backendErr as { response?: { status?: number; data?: { code?: string; reason?: string; message?: string } } };
         if (err.response?.status === 403 && err.response?.data?.code === 'ACCOUNT_SUSPENDED') {
           toast.error(
             `Your account has been suspended.\n${err.response.data.reason ? `Reason: ${err.response.data.reason}` : 'Please contact support at support@itab.ug'}`,
@@ -131,19 +142,48 @@ export function LoginPage() {
           return;
         }
         if (err.response?.status === 401) {
-          // Backend says invalid credentials — don't fall back to mock
-          toast.error('Invalid email or password');
+          // Invalid credentials — check if the email exists at all
+          try {
+            const check = await authApi.checkEmail(data.email);
+            const exists = (check.data as { data?: { exists?: boolean } }).data?.exists;
+            if (!exists) {
+              toast(
+                (t) => (
+                  <span>
+                    No account found for <strong>{data.email}</strong>.{' '}
+                    <button
+                      className="underline font-semibold text-primary-600"
+                      onClick={() => {
+                        toast.dismiss(t.id);
+                        navigate(`/register?email=${encodeURIComponent(data.email)}`);
+                      }}
+                    >
+                      Create one now
+                    </button>
+                  </span>
+                ),
+                { duration: 8000, icon: '👤' }
+              );
+            } else {
+              toast.error('Incorrect password. Please try again or reset your password.');
+            }
+          } catch {
+            toast.error('Invalid email or password');
+          }
+          setLoading(false);
+          return;
+        }
+        if (err.response) {
+          toast.error(err.response.data?.message || 'Sign in failed. Please try again.');
           setLoading(false);
           return;
         }
       }
 
-      // Backend unavailable — show error, don't fall back to mock for security
+      // Network error
       toast.error('Unable to connect to server. Please check your connection and try again.');
-      setLoading(false);
-      return;
     } catch {
-      toast.error('Invalid email or password');
+      toast.error('Sign in failed. Please try again.');
     } finally {
       setLoading(false);
     }

@@ -69,12 +69,10 @@ export function FileUpload({
     const processed: UploadedFile[] = [];
 
     for (const file of files) {
-      // Size check
       if (file.size > maxSizeMB * 1024 * 1024) {
         newErrors.push(`"${file.name}" is too large (max ${maxSizeMB}MB)`);
         continue;
       }
-      // Max files check
       if (value.length + processed.length >= maxFiles) {
         newErrors.push(`Maximum ${maxFiles} files allowed`);
         break;
@@ -111,15 +109,60 @@ export function FileUpload({
 
   const isImage = accept.includes('image');
 
+  // Open camera directly — uses capture attribute so the device camera launches immediately
+  const openCamera = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Reset the input so the same file can be re-selected
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = '';
+      cameraInputRef.current.click();
+    }
+  };
+
+  const openFileBrowser = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
   return (
     <div className={cn('w-full space-y-3', className)}>
       {label && <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{label}</label>}
 
-      {/* Drop zone */}
+      {/* Hidden file inputs — kept outside the drop zone so clicks don't bubble */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        className="hidden"
+        onChange={e => { if (e.target.files) processFiles(e.target.files); }}
+      />
+      {/*
+        Camera input:
+        - accept="image/*" restricts to images
+        - capture="environment" opens the rear camera directly on mobile
+        - On desktop browsers this falls back to the normal file picker
+      */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={e => { if (e.target.files) processFiles(e.target.files); }}
+      />
+
+      {/* Drop zone — clicking opens file browser, NOT camera */}
       <div
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
+        onClick={openFileBrowser}
         className={cn(
           'relative border-2 border-dashed rounded-2xl transition-all duration-200 cursor-pointer',
           isDragging
@@ -127,27 +170,7 @@ export function FileUpload({
             : 'border-slate-300 dark:border-slate-600 hover:border-primary-400 hover:bg-slate-50 dark:hover:bg-slate-800/50',
           compact ? 'p-4' : 'p-8'
         )}
-        onClick={() => fileInputRef.current?.click()}
       >
-        {/* Hidden file inputs */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={accept}
-          multiple={multiple}
-          className="hidden"
-          onChange={e => e.target.files && processFiles(e.target.files)}
-        />
-        {/* Camera input — capture="environment" uses rear camera on mobile */}
-        <input
-          ref={cameraInputRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-          onChange={e => e.target.files && processFiles(e.target.files)}
-        />
-
         <div className="flex flex-col items-center gap-3 text-center pointer-events-none">
           <div className={cn(
             'rounded-2xl flex items-center justify-center transition-colors',
@@ -176,11 +199,11 @@ export function FileUpload({
         </div>
       </div>
 
-      {/* Action buttons */}
+      {/* Action buttons — each has its own explicit handler, no event bubbling to drop zone */}
       <div className="flex gap-2 flex-wrap">
         <button
           type="button"
-          onClick={() => fileInputRef.current?.click()}
+          onClick={openFileBrowser}
           className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
         >
           {isImage ? <Image size={15} className="text-primary-600" /> : <File size={15} className="text-primary-600" />}
@@ -190,10 +213,10 @@ export function FileUpload({
         {showCamera && isImage && (
           <button
             type="button"
-            onClick={e => { e.stopPropagation(); cameraInputRef.current?.click(); }}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+            onClick={openCamera}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-200 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 text-sm font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors"
           >
-            <Camera size={15} className="text-green-600" />
+            <Camera size={15} className="text-emerald-600" />
             Take Photo
           </button>
         )}
@@ -201,7 +224,7 @@ export function FileUpload({
         {!isImage && (
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={openFileBrowser}
             className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
           >
             <FileText size={15} className="text-blue-600" />
@@ -264,7 +287,10 @@ export function FileUpload({
                 {/* Remove button */}
                 <button
                   type="button"
-                  onClick={() => onRemove ? onRemove(f.id) : onChange(value.filter(x => x.id !== f.id))}
+                  onClick={e => {
+                    e.stopPropagation();
+                    onRemove ? onRemove(f.id) : onChange(value.filter(x => x.id !== f.id));
+                  }}
                   className={cn(
                     'absolute bg-red-500 text-white rounded-full flex items-center justify-center transition-opacity hover:bg-red-600',
                     isImage
