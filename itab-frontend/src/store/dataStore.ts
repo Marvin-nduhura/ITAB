@@ -1,11 +1,12 @@
 /**
  * useDataStore — lightweight Zustand store for entities that don't have
  * dedicated stores. Populated by useBackendSync on every sync cycle.
- * Persisted locally so the app works offline.
+ *
+ * Render PostgreSQL is the ONLY source of truth.
+ * No localStorage persistence — data is always loaded fresh from the backend.
  */
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type {
   Inspection,
   Payment,
@@ -56,69 +57,47 @@ interface DataStore {
 }
 
 export const useDataStore = create<DataStore>()(
-  persist(
-    (set) => ({
-      // ── Initial state ────────────────────────────────────────────────────────
-      inspections: [],
-      payments: [],
-      transactions: [],
-      maintenance: [],
-      payouts: [],
-      vendorJobs: [],
-      documents: [],
-      notices: [],
-      disputes: [],
-      announcements: [],
-      agentApplications: [],
-      auditLogs: [],
-      conversations: [],
-      messages: {},
+  (set) => ({
+    // ── Initial state ────────────────────────────────────────────────────────
+    inspections: [],
+    payments: [],
+    transactions: [],
+    maintenance: [],
+    payouts: [],
+    vendorJobs: [],
+    documents: [],
+    notices: [],
+    disputes: [],
+    announcements: [],
+    agentApplications: [],
+    auditLogs: [],
+    conversations: [],
+    messages: {},
 
-      // ── Setters ──────────────────────────────────────────────────────────────
-      setInspections:      (items) => set({ inspections: items }),
-      setPayments:         (items) => set({ payments: items }),
-      setTransactions:     (items) => set({ transactions: items }),
-      setMaintenance:      (items) => set({ maintenance: items }),
-      setPayouts:          (items) => set({ payouts: items }),
-      setVendorJobs:       (items) => set({ vendorJobs: items }),
-      setDocuments:        (items) => set({ documents: items }),
-      setNotices:          (items) => set({ notices: items }),
-      setDisputes:         (items) => set({ disputes: items }),
-      setAnnouncements:    (items) => set({ announcements: items }),
-      setAgentApplications:(items) => set({ agentApplications: items }),
-      setAuditLogs:        (items) => set({ auditLogs: items }),
-      setConversations:    (items) => set({ conversations: items }),
+    // ── Setters ──────────────────────────────────────────────────────────────
+    setInspections:      (items) => set({ inspections: items }),
+    setPayments:         (items) => set({ payments: items }),
+    setTransactions:     (items) => set({ transactions: items }),
+    setMaintenance:      (items) => set({ maintenance: items }),
+    setPayouts:          (items) => set({ payouts: items }),
+    setVendorJobs:       (items) => set({ vendorJobs: items }),
+    setDocuments:        (items) => set({ documents: items }),
+    setNotices:          (items) => set({ notices: items }),
+    setDisputes:         (items) => set({ disputes: items }),
+    setAnnouncements:    (items) => set({ announcements: items }),
+    setAgentApplications:(items) => set({ agentApplications: items }),
+    setAuditLogs:        (items) => set({ auditLogs: items }),
+    setConversations:    (items) => set({ conversations: items }),
 
-      setMessages: (convId, msgs) =>
-        set((s) => ({ messages: { ...s.messages, [convId]: msgs } })),
+    setMessages: (convId, msgs) =>
+      set((s) => ({ messages: { ...s.messages, [convId]: msgs } })),
 
-      addMessage: (convId, msg) =>
-        set((s) => ({
-          messages: {
-            ...s.messages,
-            [convId]: [...(s.messages[convId] ?? []), msg],
-          },
-        })),
-    }),
-    {
-      name: 'itab_data',
-      // Persist everything — backend will overwrite on next sync
-      partialize: (s) => ({
-        inspections:      s.inspections,
-        payments:         s.payments,
-        transactions:     s.transactions,
-        maintenance:      s.maintenance,
-        payouts:          s.payouts,
-        vendorJobs:       s.vendorJobs,
-        documents:        s.documents,
-        notices:          s.notices,
-        disputes:         s.disputes,
-        announcements:    s.announcements,
-        agentApplications:s.agentApplications,
-        auditLogs:        s.auditLogs,
-        conversations:    s.conversations,
-        messages:         s.messages,
-      }),
-    }
-  )
+    addMessage: (convId, msg) =>
+      set((s) => ({
+        messages: {
+          ...s.messages,
+          [convId]: [...(s.messages[convId] ?? []), msg],
+        },
+      })),
+  })
 );

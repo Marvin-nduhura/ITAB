@@ -8,8 +8,8 @@
  * 4. When the user comes back online, re-sync immediately.
  * 5. Poll every 30 seconds while online and authenticated.
  *
- * Admin-only endpoints (users, audit-logs, agent-applications) are only
- * fetched when the current user has the 'admin' role.
+ * No localStorage is used for data — only the Zustand persist middleware
+ * writes to localStorage as a cache, and the backend always wins on next sync.
  */
 
 import { useEffect, useRef, useCallback } from 'react';
@@ -29,6 +29,7 @@ import {
   auditLogsApi,
   agentApplicationsApi,
   messagesApi,
+  contractsApi,
 } from '../lib/api';
 import type {
   Property,
@@ -80,12 +81,10 @@ export function useBackendSync() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isSyncing = useRef(false);
 
-  // ── Helper: safely cast array data ────────────────────────────────────────
   function asArray<T>(val: unknown): T[] {
     return Array.isArray(val) ? (val as T[]) : [];
   }
 
-  // ── Full sync ──────────────────────────────────────────────────────────────
   const fullSync = useCallback(async () => {
     if (!isAuthenticated || !isOnline || isSyncing.current) return;
     isSyncing.current = true;
@@ -103,15 +102,24 @@ export function useBackendSync() {
       if (data.transactions)  {
         const txs = asArray<PlatformTransaction>(data.transactions);
         setTransactions(txs);
-        setPaymentStoreTxs(txs); // also populate paymentStore
+        setPaymentStoreTxs(txs);
       }
       if (data.maintenance)   setMaintenance(asArray<MaintenanceRequest>(data.maintenance));
       if (data.payouts)       setPayouts(asArray<Payout>(data.payouts));
       if (data.vendors)       setVendors(asArray<Vendor>(data.vendors));
-      if (data.vendorJobs)    { setVendorJobs(asArray<VendorJob>(data.vendorJobs)); setVendorJobsStore(asArray<VendorJob>(data.vendorJobs)); }
-      if (data.documents)     { setDocuments(asArray<Document>(data.documents)); setDocumentStoreDocs(asArray<Document>(data.documents)); }
+      if (data.vendorJobs)    {
+        setVendorJobs(asArray<VendorJob>(data.vendorJobs));
+        setVendorJobsStore(asArray<VendorJob>(data.vendorJobs));
+      }
+      if (data.documents)     {
+        setDocuments(asArray<Document>(data.documents));
+        setDocumentStoreDocs(asArray<Document>(data.documents));
+      }
       if (data.notices)       setNotices(asArray<TenantNotice>(data.notices));
-      if (data.disputes)      { setDisputes(asArray<Dispute>(data.disputes)); setDisputeStoreDis(asArray<Dispute>(data.disputes)); }
+      if (data.disputes)      {
+        setDisputes(asArray<Dispute>(data.disputes));
+        setDisputeStoreDis(asArray<Dispute>(data.disputes));
+      }
       if (data.announcements) setAnnouncements(asArray<unknown>(data.announcements));
       if (data.notifications) setNotifications(asArray<Notification>(data.notifications));
 
@@ -120,7 +128,6 @@ export function useBackendSync() {
         const convs = asArray<Conversation>(data.conversations);
         setConversations(convs);
 
-        // Fetch messages for each conversation in parallel (fire-and-forget per conv)
         await Promise.all(
           convs.map(async (conv) => {
             try {
@@ -134,7 +141,14 @@ export function useBackendSync() {
         );
       }
 
-      // 4. Admin-only: users, audit logs, agent applications
+      // 4. Contracts
+      try {
+        const contractsRes = await contractsApi.list();
+        const contracts = asArray<unknown>((contractsRes.data as { data: unknown[] }).data);
+        setContracts(contracts as Parameters<typeof setContracts>[0]);
+      } catch { /* keep cached */ }
+
+      // 5. Admin-only: users, audit logs, agent applications
       if (user?.role === 'admin') {
         const [usersRes, auditRes, appsRes] = await Promise.allSettled([
           usersApi.list(),
@@ -158,7 +172,7 @@ export function useBackendSync() {
         }
       }
     } catch {
-      // Backend unreachable — keep local cached data, no action needed
+      // Backend unreachable — keep local cached data
     } finally {
       isSyncing.current = false;
     }
@@ -173,21 +187,21 @@ export function useBackendSync() {
     setPaymentStoreTxs, setContracts, setDocumentStoreDocs, setDisputeStoreDis,
   ]);
 
-  // ── On mount: sync immediately ─────────────────────────────────────────────
+  // On mount: sync immediately
   useEffect(() => {
     if (isAuthenticated && isOnline) {
       fullSync();
     }
   }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── When coming back online: sync immediately ──────────────────────────────
+  // When coming back online: sync immediately
   useEffect(() => {
     if (isOnline && isAuthenticated) {
       fullSync();
     }
   }, [isOnline]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Periodic background sync while online ─────────────────────────────────
+  // Periodic background sync while online
   useEffect(() => {
     if (isOnline && isAuthenticated) {
       intervalRef.current = setInterval(fullSync, SYNC_INTERVAL_MS);
@@ -202,7 +216,7 @@ export function useBackendSync() {
     };
   }, [isOnline, isAuthenticated, fullSync]);
 
-  // When the user returns to this tab, refresh /auth/me first so admin permission/district/role changes apply without waiting for the poll interval.
+  // Re-sync on tab focus
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible' && isAuthenticated && isOnline) {

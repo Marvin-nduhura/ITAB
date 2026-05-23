@@ -18,7 +18,6 @@ import type { AgentApplication } from '../../store/userStore';
 import { authApi, authGoogleApi, agentApplicationsApi } from '../../lib/api';
 import type { User } from '../../types';
 import { DISTRICTS } from '../../lib/utils';
-import type { UserRole } from '../../types';
 
 // ─── Role options (shared between form and Google modal) ─────────────────────
 const ROLE_OPTIONS = [
@@ -126,6 +125,11 @@ export function RegisterPage() {
       setInvitedRole(inviteRole || 'tenant');
     }
 
+    // Pre-fill email when redirected from login "no account found" prompt
+    if (!inviteToken && inviteEmail) {
+      setValue('email', inviteEmail);
+    }
+
     // Redirected from login after Google sign-in — open role modal immediately
     if (fromGoogle === '1') {
       if (inviteEmail)     setValue('email', inviteEmail || '');
@@ -166,30 +170,18 @@ export function RegisterPage() {
           return;
         }
 
-        // Try backend first, fall back to local
+        // Register via backend — Render DB is the only source of truth
         try {
           const backendRes = await authGoogleApi.loginOrRegister(googleData);
           const { user, token } = backendRes.data.data;
           setAuth(user as Parameters<typeof setAuth>[0], token);
           addUser(user as Parameters<typeof setAuth>[0]);
-        } catch {
-          // Backend unavailable — create locally
-          const newUser = {
-            id: `u_${Date.now()}`,
-            email: googleData.email,
-            firstName: googleData.firstName,
-            lastName: googleData.lastName,
-            avatar: googleData.avatar,
-            role: selectedRole as UserRole,
-            isVerified: true,
-            isSuspended: false,
-            kycStatus: 'pending' as const,
-            approvalStatus: 'approved' as const,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          setAuth(newUser, `google_token_${newUser.id}`);
-          addUser(newUser);
+        } catch (gErr: unknown) {
+          const ax = gErr as { response?: { status?: number; data?: { message?: string } } };
+          toast.error(ax.response?.data?.message || 'Google sign-up failed. Please check your connection and try again.');
+          setGoogleLoading(false);
+          setShowRoleModal(false);
+          return;
         }
 
         const roleLabel = ROLE_OPTIONS.find(r => r.value === selectedRole)?.label ?? selectedRole;

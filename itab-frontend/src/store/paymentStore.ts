@@ -1,10 +1,9 @@
 /**
- * Payment store — Render DB is the source of truth.
- * Every write goes to the backend immediately (or queues offline).
- * Local state is optimistic cache only.
+ * Payment store — Render DB is the ONLY source of truth.
+ * No localStorage persistence. Every write goes to the backend immediately.
+ * Local state is optimistic cache only, reset on each session from backend.
  */
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type {
   PlatformTransaction, PaymentPreference, VendorContract,
   PaymentMethod, TransactionType, UserRole,
@@ -105,257 +104,251 @@ function persistTx(tx: PlatformTransaction): void {
 }
 
 export const usePaymentStore = create<PaymentStore>()(
-  persist(
-    (set, get) => ({
-      transactions: [],
-      preferences:  [],
-      contracts:    [],
+  (set, get) => ({
+    transactions: [],
+    preferences:  [],
+    contracts:    [],
 
-      // ── Sync setters ──────────────────────────────────────────────────────
-      setTransactions: (txs) => set({ transactions: txs }),
-      setContracts:    (contracts) => set({ contracts }),
+    // ── Sync setters ──────────────────────────────────────────────────────
+    setTransactions: (txs) => set({ transactions: txs }),
+    setContracts:    (contracts) => set({ contracts }),
 
-      // ── Preferences ───────────────────────────────────────────────────────
-      setPreference: (pref) => {
-        const updated = { ...pref, updatedAt: new Date().toISOString() };
-        set(s => ({
-          preferences: [
-            ...s.preferences.filter(p => p.userId !== pref.userId),
-            updated,
-          ],
-        }));
-        // Persist to backend
-        apiSend(() => paymentPreferencesApi.save(updated));
-      },
+    // ── Preferences ───────────────────────────────────────────────────────
+    setPreference: (pref) => {
+      const updated = { ...pref, updatedAt: new Date().toISOString() };
+      set(s => ({
+        preferences: [
+          ...s.preferences.filter(p => p.userId !== pref.userId),
+          updated,
+        ],
+      }));
+      // Persist to backend
+      apiSend(() => paymentPreferencesApi.save(updated));
+    },
 
-      getPreference: (userId) => get().preferences.find(p => p.userId === userId),
+    getPreference: (userId) => get().preferences.find(p => p.userId === userId),
 
-      // ── Pay Rent ──────────────────────────────────────────────────────────
-      payRent: (params) => {
-        const {
-          tenantId, tenantName, tenantPhone, method,
-          propertyId, propertyTitle, amount,
-          landlordId, landlordName, managerId, managerName,
-          managementFeePercent, itabFeePercent,
-          inspectionCredit = 0, rentPeriod, isPartial,
-        } = params;
+    // ── Pay Rent ──────────────────────────────────────────────────────────
+    payRent: (params) => {
+      const {
+        tenantId, tenantName, tenantPhone, method,
+        propertyId, propertyTitle, amount,
+        landlordId, landlordName, managerId, managerName,
+        managementFeePercent, itabFeePercent,
+        inspectionCredit = 0, rentPeriod, isPartial,
+      } = params;
 
-        const itabFee    = Math.round(amount * itabFeePercent / 100);
-        const mgmtFee    = Math.round(amount * managementFeePercent / 100);
-        const landlordNet = amount - itabFee - mgmtFee - inspectionCredit;
-        const ref = makeRef('RENT');
+      const itabFee    = Math.round(amount * itabFeePercent / 100);
+      const mgmtFee    = Math.round(amount * managementFeePercent / 100);
+      const landlordNet = amount - itabFee - mgmtFee - inspectionCredit;
+      const ref = makeRef('RENT');
 
-        const landlordPref = get().preferences.find(p => p.userId === landlordId);
-        const managerPref  = get().preferences.find(p => p.userId === managerId);
-        const landlordMethod = (landlordPref?.preferredMethod || 'mtn_momo') as PaymentMethod | 'bank';
-        const managerMethod  = (managerPref?.preferredMethod  || 'mtn_momo') as PaymentMethod;
+      const landlordPref = get().preferences.find(p => p.userId === landlordId);
+      const managerPref  = get().preferences.find(p => p.userId === managerId);
+      const landlordMethod = (landlordPref?.preferredMethod || 'mtn_momo') as PaymentMethod | 'bank';
+      const managerMethod  = (managerPref?.preferredMethod  || 'mtn_momo') as PaymentMethod;
 
-        const txs: PlatformTransaction[] = [];
+      const txs: PlatformTransaction[] = [];
 
-        txs.push(makeTx('rent_payment',
-          { id: tenantId, name: tenantName, role: 'tenant', method, phone: tenantPhone },
+      txs.push(makeTx('rent_payment',
+        { id: tenantId, name: tenantName, role: 'tenant', method, phone: tenantPhone },
+        { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
+        amount,
+        `Rent payment for ${propertyTitle}${rentPeriod ? ` (${rentPeriod})` : ''}`,
+        { propertyId, propertyTitle, rentPeriod, isPartial, inspectionCreditApplied: inspectionCredit, reference: ref }
+      ));
+
+      txs.push(makeTx('platform_fee',
+        { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
+        { id: ITAB_ACCOUNT.id, name: ITAB_ACCOUNT.name, role: 'platform', method: 'escrow' },
+        itabFee, `Platform fee (${itabFeePercent}%) on rent for ${propertyTitle}`,
+        { propertyId, propertyTitle }
+      ));
+
+      txs.push(makeTx('management_fee_payout',
+        { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
+        { id: managerId, name: managerName, role: 'property_manager', method: managerMethod, phone: managerPref?.mtnPhone || managerPref?.airtelPhone },
+        mgmtFee, `Management fee (${managementFeePercent}%) for ${propertyTitle}`,
+        { propertyId, propertyTitle }
+      ));
+
+      if (landlordNet > 0) {
+        txs.push(makeTx('landlord_payout',
           { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-          amount,
-          `Rent payment for ${propertyTitle}${rentPeriod ? ` (${rentPeriod})` : ''}`,
-          { propertyId, propertyTitle, rentPeriod, isPartial, inspectionCreditApplied: inspectionCredit, reference: ref }
-        ));
-
-        txs.push(makeTx('platform_fee',
-          { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-          { id: ITAB_ACCOUNT.id, name: ITAB_ACCOUNT.name, role: 'platform', method: 'escrow' },
-          itabFee, `Platform fee (${itabFeePercent}%) on rent for ${propertyTitle}`,
-          { propertyId, propertyTitle }
-        ));
-
-        txs.push(makeTx('management_fee_payout',
-          { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-          { id: managerId, name: managerName, role: 'property_manager', method: managerMethod, phone: managerPref?.mtnPhone || managerPref?.airtelPhone },
-          mgmtFee, `Management fee (${managementFeePercent}%) for ${propertyTitle}`,
-          { propertyId, propertyTitle }
-        ));
-
-        if (landlordNet > 0) {
-          txs.push(makeTx('landlord_payout',
-            { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-            {
-              id: landlordId, name: landlordName, role: 'landlord',
-              method: (landlordMethod === 'bank' ? 'mtn_momo' : landlordMethod) as PaymentMethod,
-              phone: landlordPref?.mtnPhone || landlordPref?.airtelPhone,
-              bankDetails: (landlordMethod as string) === 'bank' ? {
-                bankName: landlordPref?.bankName || '',
-                accountNumber: landlordPref?.bankAccountNumber || '',
-                accountName: landlordPref?.bankAccountName || '',
-              } : undefined,
-            },
-            landlordNet,
-            `Net rent payout for ${propertyTitle}${inspectionCredit > 0 ? ` (incl. ${formatCurrency(inspectionCredit)} inspection credit deducted)` : ''}`,
-            { propertyId, propertyTitle }
-          ));
-        }
-
-        set(s => ({ transactions: [...txs, ...s.transactions] }));
-        txs.forEach(persistTx);
-        return { transactions: txs, reference: ref };
-      },
-
-      // ── Pay Inspection Fee ────────────────────────────────────────────────
-      payInspectionFee: (params) => {
-        const { tenantId, tenantName, tenantPhone, method, propertyId, propertyTitle, amount, managerId, managerName } = params;
-        const managerShare = Math.round(amount * 0.5);
-        const itabShare    = amount - managerShare;
-        const ref = makeRef('INSP');
-        const managerPref = get().preferences.find(p => p.userId === managerId);
-
-        const tx1 = makeTx('inspection_fee',
-          { id: tenantId, name: tenantName, role: 'tenant', method, phone: tenantPhone },
-          { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-          amount, `Inspection fee for ${propertyTitle} (non-refundable)`,
-          { propertyId, propertyTitle, reference: ref }
-        );
-        const tx2 = makeTx('platform_fee',
-          { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-          { id: ITAB_ACCOUNT.id, name: ITAB_ACCOUNT.name, role: 'platform', method: 'escrow' },
-          itabShare, `ITAB share of inspection fee for ${propertyTitle}`,
-          { propertyId, propertyTitle }
-        );
-        const tx3 = makeTx('management_fee_payout',
-          { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
-          { id: managerId, name: managerName, role: 'property_manager', method: (managerPref?.preferredMethod || 'mtn_momo') as PaymentMethod, phone: managerPref?.mtnPhone || managerPref?.airtelPhone },
-          managerShare, `Manager share of inspection fee for ${propertyTitle}`,
-          { propertyId, propertyTitle }
-        );
-
-        set(s => ({ transactions: [tx1, tx2, tx3, ...s.transactions] }));
-        [tx1, tx2, tx3].forEach(persistTx);
-        return tx1;
-      },
-
-      // ── Pay Vendor ────────────────────────────────────────────────────────
-      payVendor: (params) => {
-        const { vendorId, vendorName, jobId, propertyTitle, amount, description, managerId, managerName, paymentMethod, receiverPhone } = params;
-        const vendorPref = get().preferences.find(p => p.userId === vendorId);
-        const effectiveMethod = (vendorPref?.preferredMethod || paymentMethod) as PaymentMethod | 'bank';
-
-        const tx = makeTx('vendor_payment',
-          { id: managerId, name: managerName, role: 'property_manager', method: 'escrow' },
           {
-            id: vendorId, name: vendorName, role: 'vendor',
-            method: ((effectiveMethod as string) === 'bank' ? 'mtn_momo' : effectiveMethod) as PaymentMethod,
-            phone: vendorPref?.mtnPhone || vendorPref?.airtelPhone || receiverPhone,
-            bankDetails: (effectiveMethod as string) === 'bank' ? {
-              bankName: vendorPref?.bankName || '',
-              accountNumber: vendorPref?.bankAccountNumber || '',
-              accountName: vendorPref?.bankAccountName || '',
+            id: landlordId, name: landlordName, role: 'landlord',
+            method: (landlordMethod === 'bank' ? 'mtn_momo' : landlordMethod) as PaymentMethod,
+            phone: landlordPref?.mtnPhone || landlordPref?.airtelPhone,
+            bankDetails: (landlordMethod as string) === 'bank' ? {
+              bankName: landlordPref?.bankName || '',
+              accountNumber: landlordPref?.bankAccountNumber || '',
+              accountName: landlordPref?.bankAccountName || '',
             } : undefined,
           },
-          amount, description, { jobId, propertyTitle }
-        );
+          landlordNet,
+          `Net rent payout for ${propertyTitle}${inspectionCredit > 0 ? ` (incl. ${formatCurrency(inspectionCredit)} inspection credit deducted)` : ''}`,
+          { propertyId, propertyTitle }
+        ));
+      }
 
-        set(s => ({ transactions: [tx, ...s.transactions] }));
-        persistTx(tx);
-        return tx;
-      },
+      set(s => ({ transactions: [...txs, ...s.transactions] }));
+      txs.forEach(persistTx);
+      return { transactions: txs, reference: ref };
+    },
 
-      // ── Contracts ─────────────────────────────────────────────────────────
-      createContract: (data) => {
-        const contract: VendorContract = {
-          ...data, id: `c_${generateId()}`,
-          totalPaid: 0, paymentsCount: 0,
-          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-        };
-        set(s => ({ contracts: [contract, ...s.contracts] }));
-        apiCall<VendorContract>('contract', 'create',
-          () => contractsApi.create(contract) as Promise<{ data: { data: VendorContract } }>,
-          contract as unknown as Record<string, unknown>
-        );
-        return contract;
-      },
+    // ── Pay Inspection Fee ────────────────────────────────────────────────
+    payInspectionFee: (params) => {
+      const { tenantId, tenantName, tenantPhone, method, propertyId, propertyTitle, amount, managerId, managerName } = params;
+      const managerShare = Math.round(amount * 0.5);
+      const itabShare    = amount - managerShare;
+      const ref = makeRef('INSP');
+      const managerPref = get().preferences.find(p => p.userId === managerId);
 
-      updateContract: (id, updates) => {
-        set(s => ({ contracts: s.contracts.map(c => c.id === id ? { ...c, ...updates, updatedAt: new Date().toISOString() } : c) }));
-        apiSend(() => contractsApi.update(id, updates));
-      },
+      const tx1 = makeTx('inspection_fee',
+        { id: tenantId, name: tenantName, role: 'tenant', method, phone: tenantPhone },
+        { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
+        amount, `Inspection fee for ${propertyTitle} (non-refundable)`,
+        { propertyId, propertyTitle, reference: ref }
+      );
+      const tx2 = makeTx('platform_fee',
+        { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
+        { id: ITAB_ACCOUNT.id, name: ITAB_ACCOUNT.name, role: 'platform', method: 'escrow' },
+        itabShare, `ITAB share of inspection fee for ${propertyTitle}`,
+        { propertyId, propertyTitle }
+      );
+      const tx3 = makeTx('management_fee_payout',
+        { id: 'escrow', name: 'ITAB Escrow', role: 'platform', method: 'escrow' },
+        { id: managerId, name: managerName, role: 'property_manager', method: (managerPref?.preferredMethod || 'mtn_momo') as PaymentMethod, phone: managerPref?.mtnPhone || managerPref?.airtelPhone },
+        managerShare, `Manager share of inspection fee for ${propertyTitle}`,
+        { propertyId, propertyTitle }
+      );
 
-      cancelContract: (id) => {
-        set(s => ({ contracts: s.contracts.map(c => c.id === id ? { ...c, status: 'cancelled', updatedAt: new Date().toISOString() } : c) }));
-        apiSend(() => contractsApi.update(id, { status: 'cancelled' }));
-      },
+      set(s => ({ transactions: [tx1, tx2, tx3, ...s.transactions] }));
+      [tx1, tx2, tx3].forEach(persistTx);
+      return tx1;
+    },
 
-      processContractPayment: (contractId) => {
-        const contract = get().contracts.find(c => c.id === contractId);
-        if (!contract || contract.status !== 'active') return null;
+    // ── Pay Vendor ────────────────────────────────────────────────────────
+    payVendor: (params) => {
+      const { vendorId, vendorName, jobId, propertyTitle, amount, description, managerId, managerName, paymentMethod, receiverPhone } = params;
+      const vendorPref = get().preferences.find(p => p.userId === vendorId);
+      const effectiveMethod = (vendorPref?.preferredMethod || paymentMethod) as PaymentMethod | 'bank';
 
-        const vendorPref = get().preferences.find(p => p.userId === contract.vendorId);
-        const effectiveMethod = (vendorPref?.preferredMethod || contract.paymentMethod) as PaymentMethod | 'bank';
+      const tx = makeTx('vendor_payment',
+        { id: managerId, name: managerName, role: 'property_manager', method: 'escrow' },
+        {
+          id: vendorId, name: vendorName, role: 'vendor',
+          method: ((effectiveMethod as string) === 'bank' ? 'mtn_momo' : effectiveMethod) as PaymentMethod,
+          phone: vendorPref?.mtnPhone || vendorPref?.airtelPhone || receiverPhone,
+          bankDetails: (effectiveMethod as string) === 'bank' ? {
+            bankName: vendorPref?.bankName || '',
+            accountNumber: vendorPref?.bankAccountNumber || '',
+            accountName: vendorPref?.bankAccountName || '',
+          } : undefined,
+        },
+        amount, description, { jobId, propertyTitle }
+      );
 
-        const tx = makeTx('vendor_contract',
-          { id: contract.managerId, name: 'Property Manager', role: 'property_manager', method: 'escrow' },
-          {
-            id: contract.vendorId, name: contract.vendorName, role: 'vendor',
-            method: ((effectiveMethod as string) === 'bank' ? 'mtn_momo' : effectiveMethod) as PaymentMethod,
-            phone: vendorPref?.mtnPhone || vendorPref?.airtelPhone,
-            bankDetails: (effectiveMethod as string) === 'bank' ? {
-              bankName: vendorPref?.bankName || '',
-              accountNumber: vendorPref?.bankAccountNumber || '',
-              accountName: vendorPref?.bankAccountName || '',
-            } : undefined,
-          },
-          contract.amount,
-          `Contract payment: ${contract.description} for ${contract.propertyTitle}`,
-          { contractId, propertyTitle: contract.propertyTitle }
-        );
+      set(s => ({ transactions: [tx, ...s.transactions] }));
+      persistTx(tx);
+      return tx;
+    },
 
-        set(s => ({
-          transactions: [tx, ...s.transactions],
-          contracts: s.contracts.map(c => c.id === contractId ? {
-            ...c, totalPaid: c.totalPaid + contract.amount,
-            paymentsCount: c.paymentsCount + 1, updatedAt: new Date().toISOString(),
-          } : c),
-        }));
-        persistTx(tx);
-        apiSend(() => contractsApi.update(contractId, { totalPaid: contract.totalPaid + contract.amount, paymentsCount: contract.paymentsCount + 1 }));
-        return tx;
-      },
+    // ── Contracts ─────────────────────────────────────────────────────────
+    createContract: (data) => {
+      const contract: VendorContract = {
+        ...data, id: `c_${generateId()}`,
+        totalPaid: 0, paymentsCount: 0,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      set(s => ({ contracts: [contract, ...s.contracts] }));
+      apiCall<VendorContract>('contract', 'create',
+        () => contractsApi.create(contract) as Promise<{ data: { data: VendorContract } }>,
+        contract as unknown as Record<string, unknown>
+      );
+      return contract;
+    },
 
-      // ── Queries ───────────────────────────────────────────────────────────
-      getTransactionsByUser:    (userId)     => get().transactions.filter(t => t.senderId === userId || t.receiverId === userId),
-      getTransactionsByProperty:(propertyId) => get().transactions.filter(t => t.propertyId === propertyId),
-      getTransactionsByVendor:  (vendorId)   => get().transactions.filter(t => t.senderId === vendorId || t.receiverId === vendorId),
-      getPlatformRevenue: () => get().transactions.filter(t => t.type === 'platform_fee' && t.receiverId === ITAB_ACCOUNT.id && t.status === 'completed').reduce((s, t) => s + t.amount, 0),
-      getContractsByVendor:     (vendorId)   => get().contracts.filter(c => c.vendorId === vendorId),
-      getContractsByProperty:   (propertyId) => get().contracts.filter(c => c.propertyId === propertyId),
+    updateContract: (id, updates) => {
+      set(s => ({ contracts: s.contracts.map(c => c.id === id ? { ...c, ...updates, updatedAt: new Date().toISOString() } : c) }));
+      apiSend(() => contractsApi.update(id, updates));
+    },
 
-      // ── Admin actions ─────────────────────────────────────────────────────
-      retryTransaction: (id) => {
-        set(s => ({
-          transactions: s.transactions.map(t =>
-            t.id === id && t.status === 'failed'
-              ? { ...t, status: 'completed', processedAt: new Date().toISOString(), failureReason: undefined }
-              : t
-          ),
-        }));
-        apiSend(() => api.patch(`/transactions/${id}/retry`));
-      },
+    cancelContract: (id) => {
+      set(s => ({ contracts: s.contracts.map(c => c.id === id ? { ...c, status: 'cancelled', updatedAt: new Date().toISOString() } : c) }));
+      apiSend(() => contractsApi.update(id, { status: 'cancelled' }));
+    },
 
-      refundTransaction: (id) => {
-        const tx = get().transactions.find(t => t.id === id);
-        if (!tx) return;
-        const refundTx = makeTx('refund',
-          { id: tx.receiverId, name: tx.receiverName, role: tx.receiverRole, method: tx.receiverMethod },
-          { id: tx.senderId, name: tx.senderName, role: tx.senderRole, method: tx.senderMethod, phone: tx.senderPhone },
-          tx.amount, `Refund for transaction ${tx.reference}`,
-          { propertyId: tx.propertyId, propertyTitle: tx.propertyTitle }
-        );
-        set(s => ({
-          transactions: [refundTx, ...s.transactions.map(t => t.id === id ? { ...t, status: 'refunded' as const } : t)],
-        }));
-        persistTx(refundTx);
-        apiSend(() => api.patch(`/transactions/${id}/refund`));
-      },
-    }),
-    {
-      name: 'itab_payments',
-      partialize: (s) => ({ transactions: s.transactions, preferences: s.preferences, contracts: s.contracts }),
-    }
-  )
+    processContractPayment: (contractId) => {
+      const contract = get().contracts.find(c => c.id === contractId);
+      if (!contract || contract.status !== 'active') return null;
+
+      const vendorPref = get().preferences.find(p => p.userId === contract.vendorId);
+      const effectiveMethod = (vendorPref?.preferredMethod || contract.paymentMethod) as PaymentMethod | 'bank';
+
+      const tx = makeTx('vendor_contract',
+        { id: contract.managerId, name: 'Property Manager', role: 'property_manager', method: 'escrow' },
+        {
+          id: contract.vendorId, name: contract.vendorName, role: 'vendor',
+          method: ((effectiveMethod as string) === 'bank' ? 'mtn_momo' : effectiveMethod) as PaymentMethod,
+          phone: vendorPref?.mtnPhone || vendorPref?.airtelPhone,
+          bankDetails: (effectiveMethod as string) === 'bank' ? {
+            bankName: vendorPref?.bankName || '',
+            accountNumber: vendorPref?.bankAccountNumber || '',
+            accountName: vendorPref?.bankAccountName || '',
+          } : undefined,
+        },
+        contract.amount,
+        `Contract payment: ${contract.description} for ${contract.propertyTitle}`,
+        { contractId, propertyTitle: contract.propertyTitle }
+      );
+
+      set(s => ({
+        transactions: [tx, ...s.transactions],
+        contracts: s.contracts.map(c => c.id === contractId ? {
+          ...c, totalPaid: c.totalPaid + contract.amount,
+          paymentsCount: c.paymentsCount + 1, updatedAt: new Date().toISOString(),
+        } : c),
+      }));
+      persistTx(tx);
+      apiSend(() => contractsApi.update(contractId, { totalPaid: contract.totalPaid + contract.amount, paymentsCount: contract.paymentsCount + 1 }));
+      return tx;
+    },
+
+    // ── Queries ───────────────────────────────────────────────────────────
+    getTransactionsByUser:    (userId)     => get().transactions.filter(t => t.senderId === userId || t.receiverId === userId),
+    getTransactionsByProperty:(propertyId) => get().transactions.filter(t => t.propertyId === propertyId),
+    getTransactionsByVendor:  (vendorId)   => get().transactions.filter(t => t.senderId === vendorId || t.receiverId === vendorId),
+    getPlatformRevenue: () => get().transactions.filter(t => t.type === 'platform_fee' && t.receiverId === ITAB_ACCOUNT.id && t.status === 'completed').reduce((s, t) => s + t.amount, 0),
+    getContractsByVendor:     (vendorId)   => get().contracts.filter(c => c.vendorId === vendorId),
+    getContractsByProperty:   (propertyId) => get().contracts.filter(c => c.propertyId === propertyId),
+
+    // ── Admin actions ─────────────────────────────────────────────────────
+    retryTransaction: (id) => {
+      set(s => ({
+        transactions: s.transactions.map(t =>
+          t.id === id && t.status === 'failed'
+            ? { ...t, status: 'completed', processedAt: new Date().toISOString(), failureReason: undefined }
+            : t
+        ),
+      }));
+      apiSend(() => api.patch(`/transactions/${id}/retry`));
+    },
+
+    refundTransaction: (id) => {
+      const tx = get().transactions.find(t => t.id === id);
+      if (!tx) return;
+      const refundTx = makeTx('refund',
+        { id: tx.receiverId, name: tx.receiverName, role: tx.receiverRole, method: tx.receiverMethod },
+        { id: tx.senderId, name: tx.senderName, role: tx.senderRole, method: tx.senderMethod, phone: tx.senderPhone },
+        tx.amount, `Refund for transaction ${tx.reference}`,
+        { propertyId: tx.propertyId, propertyTitle: tx.propertyTitle }
+      );
+      set(s => ({
+        transactions: [refundTx, ...s.transactions.map(t => t.id === id ? { ...t, status: 'refunded' as const } : t)],
+      }));
+      persistTx(refundTx);
+      apiSend(() => api.patch(`/transactions/${id}/refund`));
+    },
+  })
 );

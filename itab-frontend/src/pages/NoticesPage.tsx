@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Bell, AlertTriangle, FileText, CheckCircle2, Clock, X,
@@ -635,36 +635,54 @@ export function NoticesPage() {
   const { user } = useAuthStore();
   const isTenant = user?.role === 'tenant';
   const isManager = user?.role === 'property_manager' || user?.role === 'landlord' || user?.role === 'admin';
-  const { notices: allNotices } = useDataStore();
+  const { notices: allNotices, setNotices } = useDataStore();
+
+  // Fetch fresh notices from backend on mount
+  useEffect(() => {
+    noticesApi.list()
+      .then(res => {
+        const data = (res.data as { data: TenantNotice[] }).data;
+        if (Array.isArray(data)) setNotices(data);
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tenant state — only show notices addressed to this tenant
-  const [notices, setNotices] = useState<TenantNotice[]>(
-    allNotices.filter(n => n.tenantId === user?.id || user?.role === 'admin')
-  );
+  const [notices, setLocalNotices] = useState<TenantNotice[]>([]);
+  const [sentNotices, setSentNotices] = useState<TenantNotice[]>([]);
+
+  // Sync local state when store updates
+  useEffect(() => {
+    if (isTenant) {
+      setLocalNotices(allNotices.filter(n => n.tenantId === user?.id));
+    } else {
+      setSentNotices(allNotices);
+    }
+  }, [allNotices, user?.id, isTenant]);
+
   const [activeTab, setActiveTab] = useState<'all' | 'unread' | 'action'>('all');
   const [disputeNotice, setDisputeNotice] = useState<TenantNotice | null>(null);
   const [showDisputeModal, setShowDisputeModal] = useState(false);
 
   // Manager state
   const [showComposeModal, setShowComposeModal] = useState(false);
-  const [sentNotices, setSentNotices] = useState<TenantNotice[]>(allNotices);
 
   // ── Tenant handlers ──────────────────────────────────────────────────────
   const handleMarkRead = (id: string) => {
-    setNotices(prev =>
-      prev.map(n => n.id === id && n.status === 'unread'
-        ? { ...n, status: 'read', readAt: new Date().toISOString() } : n
-      )
+    const updated = allNotices.map(n =>
+      n.id === id && n.status === 'unread'
+        ? { ...n, status: 'read' as const, readAt: new Date().toISOString() } : n
     );
+    setNotices(updated);
     apiSend(() => noticesApi.markRead(id));
   };
 
   const handleAcknowledge = (id: string) => {
-    setNotices(prev =>
-      prev.map(n => n.id === id
-        ? { ...n, status: 'acknowledged', acknowledgedAt: new Date().toISOString() } : n
-      )
+    const updated = allNotices.map(n =>
+      n.id === id
+        ? { ...n, status: 'acknowledged' as const, acknowledgedAt: new Date().toISOString() } : n
     );
+    setNotices(updated);
     apiSend(() => noticesApi.acknowledge(id));
     toast.success('Notice acknowledged');
   };
@@ -675,11 +693,11 @@ export function NoticesPage() {
   };
 
   const handleSubmitDispute = (noticeId: string, response: string) => {
-    setNotices(prev =>
-      prev.map(n => n.id === noticeId
-        ? { ...n, status: 'disputed', tenantResponse: response } : n
-      )
+    const updated = allNotices.map(n =>
+      n.id === noticeId
+        ? { ...n, status: 'disputed' as const, tenantResponse: response } : n
     );
+    setNotices(updated);
     toast.success('Dispute submitted. The manager will review your response.');
   };
 

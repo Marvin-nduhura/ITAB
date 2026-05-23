@@ -1,9 +1,9 @@
 /**
- * Document store — all writes go to the Render backend.
- * Local state is the cache; backend is source of truth.
+ * Document store — Render DB is the ONLY source of truth.
+ * No localStorage persistence. All writes go to the Render backend.
+ * Local state is the in-memory cache; reset on each session from backend.
  */
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import { generateId } from '../lib/utils';
 import { documentsApi } from '../lib/api';
 import { apiCall, apiSend } from '../lib/apiCall';
@@ -47,67 +47,57 @@ interface DocumentStore {
 }
 
 export const useDocumentStore = create<DocumentStore>()(
-  persist(
-    (set, get) => ({
-      documents: [],
+  (set, get) => ({
+    documents: [],
 
-      setDocuments: (docs) => set({ documents: docs }),
+    setDocuments: (docs) => set({ documents: docs }),
 
-      addDocument: async (data) => {
-        const doc: Document = {
-          ...data,
-          id: `doc_${generateId()}`,
-          status: 'pending',
-          uploadedAt: new Date().toISOString(),
-        };
-        // Optimistic
-        set(s => ({ documents: [doc, ...s.documents] }));
+    addDocument: async (data) => {
+      const doc: Document = {
+        ...data,
+        id: `doc_${generateId()}`,
+        status: 'pending',
+        uploadedAt: new Date().toISOString(),
+      };
+      // Optimistic
+      set(s => ({ documents: [doc, ...s.documents] }));
 
-        const saved = await apiCall<Document>(
-          'document', 'create',
-          () => documentsApi.upload(doc) as Promise<{ data: { data: Document } }>,
-          doc as unknown as Record<string, unknown>
-        );
-        if (saved && saved.id !== doc.id) {
-          set(s => ({ documents: s.documents.map(d => d.id === doc.id ? { ...d, ...saved } : d) }));
-          return saved;
-        }
-        return doc;
-      },
+      const saved = await apiCall<Document>(
+        'document', 'create',
+        () => documentsApi.upload(doc) as Promise<{ data: { data: Document } }>,
+        doc as unknown as Record<string, unknown>
+      );
+      if (saved && saved.id !== doc.id) {
+        set(s => ({ documents: s.documents.map(d => d.id === doc.id ? { ...d, ...saved } : d) }));
+        return saved;
+      }
+      return doc;
+    },
 
-      approveDocument: async (id, adminName, notes) => {
-        set(s => ({
-          documents: s.documents.map(d =>
-            d.id === id ? { ...d, status: 'approved' as const, reviewedBy: adminName, reviewedAt: new Date().toISOString(), adminNotes: notes || 'Document verified and approved.' } : d
-          ),
-        }));
-        await apiSend(() => documentsApi.approve(id, notes));
-      },
+    approveDocument: async (id, adminName, notes) => {
+      set(s => ({
+        documents: s.documents.map(d =>
+          d.id === id ? { ...d, status: 'approved' as const, reviewedBy: adminName, reviewedAt: new Date().toISOString(), adminNotes: notes || 'Document verified and approved.' } : d
+        ),
+      }));
+      await apiSend(() => documentsApi.approve(id, notes));
+    },
 
-      rejectDocument: async (id, adminName, notes) => {
-        set(s => ({
-          documents: s.documents.map(d =>
-            d.id === id ? { ...d, status: 'rejected' as const, reviewedBy: adminName, reviewedAt: new Date().toISOString(), adminNotes: notes } : d
-          ),
-        }));
-        await apiSend(() => documentsApi.reject(id, notes));
-      },
+    rejectDocument: async (id, adminName, notes) => {
+      set(s => ({
+        documents: s.documents.map(d =>
+          d.id === id ? { ...d, status: 'rejected' as const, reviewedBy: adminName, reviewedAt: new Date().toISOString(), adminNotes: notes } : d
+        ),
+      }));
+      await apiSend(() => documentsApi.reject(id, notes));
+    },
 
-      deleteDocument: async (id) => {
-        set(s => ({ documents: s.documents.filter(d => d.id !== id) }));
-        await apiCall('document', 'delete', () => documentsApi.delete(id) as Promise<{ data: { data: unknown } }>, { id });
-      },
+    deleteDocument: async (id) => {
+      set(s => ({ documents: s.documents.filter(d => d.id !== id) }));
+      await apiCall('document', 'delete', () => documentsApi.delete(id) as Promise<{ data: { data: unknown } }>, { id });
+    },
 
-      getDocsByOwner: (ownerId) => get().documents.filter(d => d.ownerId === ownerId),
-      getPendingDocs: () => get().documents.filter(d => d.status === 'pending'),
-    }),
-    {
-      name: 'itab_documents',
-      partialize: (s) => ({ documents: s.documents }),
-      merge: (persisted: unknown, current) => {
-        const p = persisted as Partial<DocumentStore>;
-        return { ...current, documents: p.documents || [] };
-      },
-    }
-  )
+    getDocsByOwner: (ownerId) => get().documents.filter(d => d.ownerId === ownerId),
+    getPendingDocs: () => get().documents.filter(d => d.status === 'pending'),
+  })
 );

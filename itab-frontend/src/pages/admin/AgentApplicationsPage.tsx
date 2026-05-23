@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Briefcase, CheckCircle2, XCircle, MapPin, FileText, Image, Download, Eye, X } from 'lucide-react';
+import { Briefcase, CheckCircle2, XCircle, MapPin, FileText, Download, Eye, X, RefreshCw } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
@@ -10,28 +10,22 @@ import { Avatar } from '../../components/ui/Avatar';
 import { useUserStore, type AgentApplication } from '../../store/userStore';
 import { useAuthStore } from '../../store/authStore';
 import { useDataStore } from '../../store/dataStore';
-import { agentApplicationsApi } from '../../lib/api';
-import { timeAgo, formatDate, roleLabels } from '../../lib/utils';
+import { agentApplicationsApi, documentsApi } from '../../lib/api';
+import { timeAgo, roleLabels } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
 // ─── Document viewer ──────────────────────────────────────────────────────────
 function DocViewer({ dataUrl, name, onClose }: { dataUrl: string; name: string; onClose: () => void }) {
-  const isImage = dataUrl.startsWith('data:image') || /\.(jpg|jpeg|png|gif|webp)$/i.test(name);
+  const isImage = dataUrl.startsWith('data:image') || /\.(jpg|jpeg|png|gif|webp)/i.test(name);
   const isPdf = dataUrl.startsWith('data:application/pdf') || name.toLowerCase().endsWith('.pdf');
-
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-3xl bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 dark:border-slate-700">
           <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate">{name}</p>
           <div className="flex items-center gap-2">
-            <a
-              href={dataUrl}
-              download={name}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-medium transition-colors"
-            >
+            <a href={dataUrl} download={name} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-medium transition-colors">
               <Download size={13} /> Download
             </a>
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
@@ -39,7 +33,6 @@ function DocViewer({ dataUrl, name, onClose }: { dataUrl: string; name: string; 
             </button>
           </div>
         </div>
-        {/* Content */}
         <div className="max-h-[75vh] overflow-auto p-4 flex items-center justify-center bg-slate-50 dark:bg-slate-900">
           {isImage ? (
             <img src={dataUrl} alt={name} className="max-w-full max-h-[70vh] object-contain rounded-xl shadow" />
@@ -49,8 +42,7 @@ function DocViewer({ dataUrl, name, onClose }: { dataUrl: string; name: string; 
             <div className="text-center py-12">
               <FileText size={48} className="mx-auto text-slate-300 mb-3" />
               <p className="text-slate-500 text-sm">Preview not available for this file type.</p>
-              <a href={dataUrl} download={name}
-                className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors">
+              <a href={dataUrl} download={name} className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors">
                 <Download size={14} /> Download to view
               </a>
             </div>
@@ -63,8 +55,7 @@ function DocViewer({ dataUrl, name, onClose }: { dataUrl: string; name: string; 
 
 // ─── Document thumbnail ───────────────────────────────────────────────────────
 function DocThumb({ dataUrl, name, label, onClick }: { dataUrl?: string; name: string; label: string; onClick: () => void }) {
-  const isImage = dataUrl && (dataUrl.startsWith('data:image') || /\.(jpg|jpeg|png|gif|webp)$/i.test(name));
-
+  const isImage = dataUrl && (dataUrl.startsWith('data:image') || /\.(jpg|jpeg|png|gif|webp)/i.test(name));
   if (!dataUrl) {
     return (
       <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-100 dark:bg-slate-700 border border-dashed border-slate-300 dark:border-slate-600">
@@ -76,19 +67,10 @@ function DocThumb({ dataUrl, name, label, onClick }: { dataUrl?: string; name: s
       </div>
     );
   }
-
   return (
-    <button
-      onClick={onClick}
-      className="group flex items-center gap-2.5 p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:border-primary-400 hover:shadow-sm transition-all text-left w-full"
-    >
-      {/* Thumbnail or icon */}
+    <button onClick={onClick} className="group flex items-center gap-2.5 p-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 hover:border-primary-400 hover:shadow-sm transition-all text-left w-full">
       <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 dark:bg-slate-700 flex items-center justify-center">
-        {isImage ? (
-          <img src={dataUrl} alt={name} className="w-full h-full object-cover" />
-        ) : (
-          <FileText size={18} className="text-slate-400" />
-        )}
+        {isImage ? <img src={dataUrl} alt={name} className="w-full h-full object-cover" /> : <FileText size={18} className="text-slate-400" />}
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">{label}</p>
@@ -108,23 +90,38 @@ export function AgentApplicationsPage() {
   const { agentApplications: backendApps, setAgentApplications } = useDataStore();
   const { user } = useAuthStore();
 
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchApplications = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await agentApplicationsApi.list();
+      const apps = (res.data as { data: AgentApplication[] }).data;
+      if (Array.isArray(apps)) setAgentApplications(apps);
+    } catch { /* keep cached */ }
+    finally { setRefreshing(false); }
+  }, [setAgentApplications]);
+
+  useMemo(() => { fetchApplications(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const allApps = useMemo(() => {
     const map = new Map<string, AgentApplication>();
-    (backendApps as AgentApplication[]).forEach(raw => {
-      if (raw?.id) map.set(raw.id, raw);
-    });
-    agentApplications.forEach(a => {
-      if (a?.id && !map.has(a.id)) map.set(a.id, a);
-    });
-    return [...map.values()].sort(
-      (x, y) => new Date(y.createdAt || 0).getTime() - new Date(x.createdAt || 0).getTime()
-    );
+    (backendApps as AgentApplication[]).forEach(raw => { if (raw?.id) map.set(raw.id, raw); });
+    agentApplications.forEach(a => { if (a?.id && !map.has(a.id)) map.set(a.id, a); });
+    return [...map.values()].sort((x, y) => new Date(y.createdAt || 0).getTime() - new Date(x.createdAt || 0).getTime());
   }, [backendApps, agentApplications]);
+
   const [selected, setSelected] = useState<AgentApplication | null>(null);
   const [adminNote, setAdminNote] = useState('');
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<'pending' | 'approved' | 'rejected' | ''>('');
   const [viewingDoc, setViewingDoc] = useState<{ dataUrl: string; name: string } | null>(null);
+
+  // Per-document approve/reject state
+  const [, setDocDecisions] = useState<Record<string, 'approved' | 'rejected'>>({});
+  const [docNoteModal, setDocNoteModal] = useState<{ docId: string; action: 'approve' | 'reject' } | null>(null);
+  const [docNote, setDocNote] = useState('');
+  const [docActionLoading, setDocActionLoading] = useState(false);
 
   const filtered = allApps.filter(a => !filterStatus || a.status === filterStatus);
   const pendingCount = allApps.filter(a => a.status === 'pending').length;
@@ -138,21 +135,18 @@ export function AgentApplicationsPage() {
       if (updated?.id) {
         const { agentApplications: da } = useDataStore.getState();
         const has = da.some(row => (row as AgentApplication).id === updated.id);
-        setAgentApplications(
-          has
-            ? da.map(row => ((row as AgentApplication).id === updated.id ? updated : row))
-            : [updated, ...da]
-        );
+        setAgentApplications(has ? da.map(row => ((row as AgentApplication).id === updated.id ? updated : row)) : [updated, ...da]);
       }
     } catch { /* offline */ }
     approveAgentApplication(selected!.id, adminNote, {
-      id: user!.id, name: `${user!.firstName} ${user!.lastName}`, role: user!.role,
+      id: user!.id,
+      name: `${user!.firstName} ${user!.lastName}`,
+      role: user!.role,
     });
     setLoading(false);
     const roleLabel = roleLabels[selected!.role as keyof typeof roleLabels] || selected!.role || 'applicant';
     toast.success(`Application approved! ${selected!.firstName} can now operate as a ${roleLabel}.`);
-    setSelected(null);
-    setAdminNote('');
+    setSelected(null); setAdminNote(''); setDocDecisions({});
   };
 
   const handleReject = async () => {
@@ -164,20 +158,39 @@ export function AgentApplicationsPage() {
       if (updated?.id) {
         const { agentApplications: da } = useDataStore.getState();
         const has = da.some(row => (row as AgentApplication).id === updated.id);
-        setAgentApplications(
-          has
-            ? da.map(row => ((row as AgentApplication).id === updated.id ? updated : row))
-            : [updated, ...da]
-        );
+        setAgentApplications(has ? da.map(row => ((row as AgentApplication).id === updated.id ? updated : row)) : [updated, ...da]);
       }
     } catch { /* offline */ }
     rejectAgentApplication(selected!.id, adminNote, {
-      id: user!.id, name: `${user!.firstName} ${user!.lastName}`, role: user!.role,
+      id: user!.id,
+      name: `${user!.firstName} ${user!.lastName}`,
+      role: user!.role,
     });
     setLoading(false);
-    toast(`Application rejected. Applicant will be notified.`, { icon: '❌' });
-    setSelected(null);
-    setAdminNote('');
+    toast('Application rejected. Applicant will be notified.', { icon: '❌' });
+    setSelected(null); setAdminNote(''); setDocDecisions({});
+  };
+
+  // Per-document action
+  const handleDocAction = async () => {
+    if (!docNoteModal) return;
+    if (docNoteModal.action === 'reject' && !docNote.trim()) { toast.error('Provide a reason for rejection'); return; }
+    setDocActionLoading(true);
+    try {
+      if (docNoteModal.action === 'approve') {
+        await documentsApi.approve(docNoteModal.docId, docNote || 'Document verified and approved.');
+      } else {
+        await documentsApi.reject(docNoteModal.docId, docNote);
+      }
+      setDocDecisions(prev => ({ ...prev, [docNoteModal.docId]: docNoteModal.action === 'approve' ? 'approved' : 'rejected' }));
+      toast.success(docNoteModal.action === 'approve' ? 'Document approved.' : 'Document rejected.');
+    } catch {
+      toast.error('Could not update document. Try again.');
+    } finally {
+      setDocActionLoading(false);
+      setDocNoteModal(null);
+      setDocNote('');
+    }
   };
 
   return (
@@ -185,17 +198,20 @@ export function AgentApplicationsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Applications</h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            {pendingCount} pending application{pendingCount !== 1 ? 's' : ''} awaiting review
-          </p>
+          <p className="text-sm text-slate-500 mt-0.5">{pendingCount} pending application{pendingCount !== 1 ? 's' : ''} awaiting review</p>
         </div>
+        <Button size="sm" variant="secondary" icon={<RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />} onClick={fetchApplications} disabled={refreshing}>Refresh</Button>
       </div>
 
       {/* Filter tabs */}
       <div className="flex gap-1 bg-slate-100 dark:bg-slate-800 rounded-xl p-1 w-fit">
         {([['', 'All'], ['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected']] as const).map(([val, label]) => (
           <button key={val} onClick={() => setFilterStatus(val as typeof filterStatus)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${filterStatus === val ? 'bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-slate-100' : 'text-slate-500'}`}>
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+              filterStatus === val
+                ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 shadow-sm'
+                : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}>
             {label}
             {val === 'pending' && pendingCount > 0 && (
               <span className="ml-1.5 bg-amber-500 text-white text-xs rounded-full px-1.5 py-0.5">{pendingCount}</span>
@@ -218,7 +234,9 @@ export function AgentApplicationsPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-bold text-slate-900 dark:text-slate-100">{app.firstName} {app.lastName}</h3>
                       {app.role && (
-                        <Badge variant="blue" className="capitalize">{roleLabels[app.role as keyof typeof roleLabels] || app.role}</Badge>
+                        <Badge variant="blue" className="capitalize">
+                          {roleLabels[app.role as keyof typeof roleLabels] || app.role}
+                        </Badge>
                       )}
                       <Badge variant={app.status === 'approved' ? 'green' : app.status === 'rejected' ? 'red' : 'yellow'}>
                         {app.status === 'pending' ? 'Pending Review' : app.status === 'approved' ? 'Approved' : 'Rejected'}
@@ -229,14 +247,13 @@ export function AgentApplicationsPage() {
                       <MapPin size={11} />
                       <span className="truncate">{app.districts.join(', ')}</span>
                     </div>
-                    {/* Document count indicator */}
                     <div className="flex items-center gap-2 mt-2">
                       {app.nationalIdDoc ? (
                         <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
                           <CheckCircle2 size={11} /> National ID
                         </span>
                       ) : (
-                        <span className="flex items-center gap-1 text-xs text-slate-400">
+                        <span className="flex items-center gap-1 text-xs text-red-500">
                           <XCircle size={11} /> No National ID
                         </span>
                       )}
@@ -247,7 +264,11 @@ export function AgentApplicationsPage() {
                       )}
                     </div>
                     {app.adminNote && (
-                      <div className={`mt-2 p-2 rounded-lg text-xs ${app.status === 'approved' ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400'}`}>
+                      <div className={`mt-2 p-2 rounded-lg text-xs ${
+                        app.status === 'approved'
+                          ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                          : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+                      }`}>
                         <strong>Admin note:</strong> {app.adminNote}
                       </div>
                     )}
@@ -256,12 +277,10 @@ export function AgentApplicationsPage() {
                 <div className="flex flex-col items-end gap-2 flex-shrink-0">
                   <p className="text-xs text-slate-400">{timeAgo(app.createdAt)}</p>
                   {app.status === 'pending' && (
-                    <Button size="sm" onClick={() => { setSelected(app); setAdminNote(''); }}>Review</Button>
+                    <Button size="sm" onClick={() => { setSelected(app); setAdminNote(''); setDocDecisions({}); }}>Review</Button>
                   )}
                   {app.status !== 'pending' && (
-                    <Button size="sm" variant="secondary" onClick={() => { setSelected(app); setAdminNote(app.adminNote || ''); }}>
-                      View
-                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => { setSelected(app); setAdminNote(app.adminNote || ''); setDocDecisions({}); }}>View</Button>
                   )}
                 </div>
               </div>
@@ -270,121 +289,146 @@ export function AgentApplicationsPage() {
         </div>
       )}
 
-      {/* ── Review Modal ──────────────────────────────────────────────── */}
-      <Modal
-        open={!!selected}
-        onClose={() => { setSelected(null); setAdminNote(''); }}
-        title="Review Application"
-        size="lg"
-        footer={
-          selected?.status === 'pending' ? (
-            <div className="flex gap-2 w-full">
-              <Button variant="danger" loading={loading} icon={<XCircle size={14} />} onClick={handleReject}>Reject</Button>
-              <Button loading={loading} icon={<CheckCircle2 size={14} />} onClick={handleApprove}>Approve</Button>
-            </div>
-          ) : (
-            <Button variant="secondary" onClick={() => setSelected(null)}>Close</Button>
-          )
-        }
-      >
-        {selected && (
-          <div className="space-y-4">
+      {/* Review modal */}
+      {selected && (
+        <Modal
+          open
+          onClose={() => { setSelected(null); setAdminNote(''); setDocDecisions({}); }}
+          title={`Review Application — ${selected.firstName} ${selected.lastName}`}
+          size="lg"
+        >
+          <div className="space-y-5">
             {/* Applicant info */}
-            <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-              <Avatar name={`${selected.firstName} ${selected.lastName}`} size="md" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-bold text-slate-900 dark:text-slate-100">{selected.firstName} {selected.lastName}</p>
-                  {selected.role && (
-                    <Badge variant="blue" className="capitalize">{roleLabels[selected.role as keyof typeof roleLabels] || selected.role}</Badge>
-                  )}
-                </div>
-                <p className="text-xs text-slate-400">{selected.email} · {selected.phone}</p>
-                <p className="text-xs text-slate-400">Applied {formatDate(selected.createdAt)}</p>
-              </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div><span className="text-slate-500">Role:</span> <span className="font-medium capitalize">{roleLabels[selected.role as keyof typeof roleLabels] || selected.role}</span></div>
+              <div><span className="text-slate-500">Email:</span> <span className="font-medium">{selected.email}</span></div>
+              <div><span className="text-slate-500">Phone:</span> <span className="font-medium">{selected.phone || '—'}</span></div>
+              <div><span className="text-slate-500">Applied:</span> <span className="font-medium">{timeAgo(selected.createdAt)}</span></div>
+              <div className="col-span-2"><span className="text-slate-500">Districts:</span> <span className="font-medium">{selected.districts.join(', ')}</span></div>
             </div>
 
-            {/* ── Documents section ── */}
+            {/* Experience */}
             <div>
-              <p className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-2">
-                <FileText size={15} className="text-primary-600" />
-                Submitted Documents
-              </p>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Experience</p>
+              <p className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700/50 rounded-xl p-3">{selected.experience}</p>
+            </div>
+
+            {/* Motivation */}
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Motivation</p>
+              <p className="text-sm text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-700/50 rounded-xl p-3">{selected.motivation}</p>
+            </div>
+
+            {/* Documents */}
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Documents</p>
               <div className="space-y-2">
-                {/* National ID */}
                 <DocThumb
                   dataUrl={selected.nationalIdDoc}
-                  name="national-id.jpg"
-                  label={`National ID${selected.nationalIdNumber ? ` — ${selected.nationalIdNumber}` : ''}`}
-                  onClick={() => selected.nationalIdDoc && setViewingDoc({ dataUrl: selected.nationalIdDoc, name: `National ID — ${selected.nationalIdNumber || selected.firstName}` })}
+                  name="national_id.jpg"
+                  label="National ID"
+                  onClick={() => selected.nationalIdDoc && setViewingDoc({ dataUrl: selected.nationalIdDoc, name: 'National ID' })}
                 />
-
-                {/* Additional docs */}
-                {selected.additionalDocs && selected.additionalDocs.length > 0 ? (
-                  selected.additionalDocs.map((doc, idx) => (
-                    <DocThumb
-                      key={idx}
-                      dataUrl={doc.dataUrl}
-                      name={doc.name}
-                      label={`Additional Document ${idx + 1} — ${doc.name}`}
-                      onClick={() => setViewingDoc({ dataUrl: doc.dataUrl, name: doc.name })}
-                    />
-                  ))
-                ) : (
-                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-dashed border-slate-200 dark:border-slate-600">
-                    <Image size={15} className="text-slate-400 flex-shrink-0" />
-                    <p className="text-xs text-slate-400">No additional documents submitted</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Application details */}
-            <div className="space-y-3">
-              <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Districts</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {selected.districts.map(d => (
-                    <span key={d} className="text-xs bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300 px-2.5 py-1 rounded-full font-medium">{d}</span>
-                  ))}
-                </div>
-              </div>
-              <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Experience</p>
-                <p className="text-sm text-slate-700 dark:text-slate-300">{selected.experience}</p>
-              </div>
-              <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Motivation</p>
-                <p className="text-sm text-slate-700 dark:text-slate-300">{selected.motivation}</p>
+                {selected.additionalDocs?.map((doc, idx) => (
+                  <DocThumb
+                    key={idx}
+                    dataUrl={doc.dataUrl}
+                    name={doc.name}
+                    label={doc.name}
+                    onClick={() => setViewingDoc({ dataUrl: doc.dataUrl, name: doc.name })}
+                  />
+                ))}
               </div>
             </div>
 
             {/* Admin note */}
-            {selected.status === 'pending' ? (
+            {selected.status === 'pending' && (
               <Textarea
-                label="Admin Decision Note * (required)"
-                placeholder="e.g. 'Approved — valid National ID, strong experience in Kampala market' or 'Rejected — National ID photo is blurry, please resubmit'"
+                label="Admin Note *"
+                placeholder="Add a note (required for both approval and rejection)..."
+                rows={3}
                 value={adminNote}
                 onChange={e => setAdminNote(e.target.value)}
-                rows={3}
               />
-            ) : selected.adminNote ? (
-              <div className={`p-3 rounded-xl border text-sm ${selected.status === 'approved' ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400'}`}>
-                <p className="font-semibold mb-0.5">Admin Decision</p>
-                <p>{selected.adminNote}</p>
+            )}
+            {selected.status !== 'pending' && selected.adminNote && (
+              <div className={`p-3 rounded-xl text-sm ${
+                selected.status === 'approved'
+                  ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300'
+                  : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300'
+              }`}>
+                <strong>Admin note:</strong> {selected.adminNote}
               </div>
-            ) : null}
-          </div>
-        )}
-      </Modal>
+            )}
 
-      {/* ── Full-screen document viewer ───────────────────────────────── */}
+            {selected.status === 'pending' && (
+              <div className="flex gap-3 pt-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => { setSelected(null); setAdminNote(''); setDocDecisions({}); }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger"
+                  className="flex-1"
+                  loading={loading}
+                  onClick={handleReject}
+                >
+                  Reject
+                </Button>
+                <Button
+                  className="flex-1"
+                  loading={loading}
+                  onClick={handleApprove}
+                >
+                  Approve
+                </Button>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Document viewer */}
       {viewingDoc && (
         <DocViewer
           dataUrl={viewingDoc.dataUrl}
           name={viewingDoc.name}
           onClose={() => setViewingDoc(null)}
         />
+      )}
+
+      {/* Per-document action modal */}
+      {docNoteModal && (
+        <Modal
+          open
+          onClose={() => { setDocNoteModal(null); setDocNote(''); }}
+          title={docNoteModal.action === 'approve' ? 'Approve Document' : 'Reject Document'}
+          size="sm"
+        >
+          <div className="space-y-4">
+            <Textarea
+              label={docNoteModal.action === 'approve' ? 'Approval note (optional)' : 'Rejection reason *'}
+              placeholder={docNoteModal.action === 'approve' ? 'Document verified and approved.' : 'Explain why this document is rejected...'}
+              rows={3}
+              value={docNote}
+              onChange={e => setDocNote(e.target.value)}
+            />
+            <div className="flex gap-3">
+              <Button variant="secondary" className="flex-1" onClick={() => { setDocNoteModal(null); setDocNote(''); }}>Cancel</Button>
+              <Button
+                className="flex-1"
+                variant={docNoteModal.action === 'approve' ? 'primary' : 'danger'}
+                loading={docActionLoading}
+                onClick={handleDocAction}
+              >
+                {docNoteModal.action === 'approve' ? 'Approve' : 'Reject'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );

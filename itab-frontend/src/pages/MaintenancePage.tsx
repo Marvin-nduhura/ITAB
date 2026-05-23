@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { Wrench, Plus, AlertCircle, Clock, CheckCircle2, UserCheck, Star, Phone, RotateCcw, XCircle, ArrowLeft } from 'lucide-react';
 import { Button } from '../components/ui/Button';
@@ -29,13 +29,31 @@ const categoryLabels: Record<VendorCategory, string> = {
 export function MaintenancePage() {
   const { user } = useAuthStore();
   const { vendors, assignJob, completeJob, rateVendor, getJobsByMaintenance } = useVendorStore();
-  const { maintenance: allMaintenance } = useDataStore();
+  const { maintenance: allMaintenance, setMaintenance } = useDataStore();
   const { properties: allProperties } = usePropertyStore();
+  const [, setRefreshing] = useState(false);
 
-  // Only show maintenance requests this user is allowed to see
-  const [requests, setRequests] = useState<MaintenanceRequest[]>(() =>
-    filterMaintenanceForUser(allMaintenance, user, allProperties)
-  );
+  // Fetch fresh from Render DB on mount
+  const fetchMaintenance = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const [maintRes] = await Promise.allSettled([
+        maintenanceApi.list(),
+        import('../lib/api').then(m => m.vendorsApi.list()),
+        import('../lib/api').then(m => m.vendorJobsApi.list()),
+      ]);
+      if (maintRes.status === 'fulfilled') {
+        const data = (maintRes.value.data as { data: MaintenanceRequest[] }).data;
+        if (Array.isArray(data)) setMaintenance(data);
+      }
+    } catch { /* keep cached */ }
+    finally { setRefreshing(false); }
+  }, [setMaintenance]);
+
+  useEffect(() => { fetchMaintenance(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Always derive from store
+  const requests = filterMaintenanceForUser(allMaintenance, user, allProperties);
   const [showNewModal, setShowNewModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState<MaintenanceRequest | null>(null);
   const [showCompleteModal, setShowCompleteModal] = useState<MaintenanceRequest | null>(null);
@@ -78,28 +96,18 @@ export function MaintenancePage() {
     if (!form.title || !form.description) { toast.error('Please fill all fields'); return; }
     setLoading(true);
     try {
-      const res = await maintenanceApi.create({
-        propertyId: 'p6', propertyTitle: '1-Bedroom Apartment in Entebbe',
+      // Find the user's rented property
+      const rentedProp = allProperties.find(p => p.tenantId === user?.id && p.status === 'rented');
+      await maintenanceApi.create({
+        propertyId: rentedProp?.id || 'p6',
+        propertyTitle: rentedProp?.title || 'My Property',
         title: form.title, description: form.description,
         priority: form.priority, photos: photos.map(p => p.dataUrl),
       });
-      const saved = (res.data as { data: MaintenanceRequest }).data;
-      setRequests(prev => [saved, ...prev]);
+      await fetchMaintenance();
       toast.success('Maintenance request submitted!');
     } catch {
-      // Offline — add locally
-      const newReq: MaintenanceRequest = {
-        id: `m_${Date.now()}`,
-        propertyId: 'p6', propertyTitle: '1-Bedroom Apartment in Entebbe',
-        tenantId: user?.id || '',
-        tenantName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim(),
-        title: form.title, description: form.description,
-        priority: form.priority as MaintenanceRequest['priority'],
-        status: 'submitted', photos: photos.map(p => p.dataUrl),
-        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      };
-      setRequests(prev => [newReq, ...prev]);
-      toast.success('Maintenance request saved (will sync when online)');
+      toast.error('Failed to submit. Please check your connection.');
     } finally {
       setLoading(false);
       setShowNewModal(false);
@@ -129,10 +137,7 @@ export function MaintenancePage() {
         managerNotes: assignNotes || undefined,
         photos: [],
       });
-      setRequests(prev => prev.map(r => r.id === showAssignModal.id
-        ? { ...r, status: 'assigned', vendorId: vendor.id, vendorName: `${vendor.firstName} ${vendor.lastName}`, estimatedCost: estimatedCost ? Number(estimatedCost) : undefined }
-        : r
-      ));
+      await fetchMaintenance();
       toast.success(`Assigned to ${vendor.firstName} ${vendor.lastName}!`);
     } catch {
       toast.error('Failed to assign vendor');
@@ -151,10 +156,10 @@ export function MaintenancePage() {
     const jobs = getJobsByMaintenance(showCompleteModal.id);
     const job = jobs[0];
     if (job) completeJob(job.id, Number(actualCost) || 0, completionNotes);
-    setRequests(prev => prev.map(r => r.id === showCompleteModal.id
-      ? { ...r, status: 'completed', actualCost: Number(actualCost) || undefined, completedAt: new Date().toISOString() }
-      : r
-    ));
+    try {
+      await maintenanceApi.update(showCompleteModal.id, { status: 'completed', actualCost: Number(actualCost) || undefined });
+      await fetchMaintenance();
+    } catch { /* keep local */ }
     const vendorId = showCompleteModal.vendorId;
     const vendorName = showCompleteModal.vendorName;
     const jobId = job?.id || '';
@@ -162,7 +167,6 @@ export function MaintenancePage() {
     setActualCost('');
     setCompletionNotes('');
     toast.success('Request marked as completed!');
-    // Prompt to rate
     if (vendorId && vendorName && jobId) {
       setTimeout(() => {
         setShowRateModal({ request: showCompleteModal, jobId, vendorId, vendorName });
@@ -179,43 +183,23 @@ export function MaintenancePage() {
     toast.success('Vendor rated! Thank you for your feedback.');
   };
 
-  // Revert a status change — moves request back to a previous state
-  const handleRevert = () => {
-    if (!showRevertModal) return;
-    const { request, targetStatus, label } = showRevertModal;
-    setRequests(prev => prev.map(r =>
-      r.id === request.id
-        ? { ...r, status: targetStatus, completedAt: undefined, actualCost: undefined }
-        : r
-    ));
-    setShowRevertModal(null);
-    toast(`↩️ "${request.title}" reverted to ${label}`, { duration: 3000 });
+  // Status change — writes to backend then refreshes
+  const changeStatus = async (id: string, newStatus: MaintenanceRequest['status'], label: string) => {
+    try {
+      await maintenanceApi.update(id, { status: newStatus });
+      await fetchMaintenance();
+      toast.success(`Marked as ${label}`);
+    } catch {
+      toast.error('Failed to update status. Please try again.');
+    }
   };
 
-  // Quick status change with toast undo
-  const changeStatus = (id: string, newStatus: MaintenanceRequest['status'], label: string) => {
-    const prev = requests.find(r => r.id === id);
-    if (!prev) return;
-    const prevStatus = prev.status;
-    setRequests(r => r.map(req => req.id === id ? { ...req, status: newStatus } : req));
-    toast(
-      (t) => (
-        <span className="flex items-center gap-3">
-          <span>Marked as <strong>{label}</strong></span>
-          <button
-            onClick={() => {
-              setRequests(r => r.map(req => req.id === id ? { ...req, status: prevStatus } : req));
-              toast.dismiss(t.id);
-              toast(`↩️ Reverted back to ${maintenanceStatusConfig[prevStatus]?.label || prevStatus}`);
-            }}
-            className="px-2 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-xs font-semibold border border-white/30 transition-colors"
-          >
-            Undo
-          </button>
-        </span>
-      ),
-      { duration: 6000, icon: '✅' }
-    );
+  // Revert / cancel from the confirmation modal
+  const handleRevert = async () => {
+    if (!showRevertModal) return;
+    const { request, targetStatus, label } = showRevertModal;
+    setShowRevertModal(null);
+    await changeStatus(request.id, targetStatus, label);
   };
 
   const availableVendors = vendors.filter(v =>

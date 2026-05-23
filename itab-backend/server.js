@@ -987,6 +987,25 @@ app.post('/api/auth/register', async (req, res) => {
     );
     const user = formatUser(result.rows[0]);
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+
+    // Notify admins when a vetting-required role registers
+    if (vetting) {
+      const roleLabel = assignedRole === 'landlord' ? 'Landlord' : assignedRole === 'property_manager' ? 'Property Manager' : 'Agent';
+      const admins = await pool.query(`SELECT id FROM users WHERE role = 'admin' AND is_suspended = false`);
+      for (const a of admins.rows) {
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+           VALUES ($1, $2, 'kyc_review', $3, $4, false, '/admin/vetting')`,
+          [
+            uuidv4(),
+            a.id,
+            `New ${roleLabel} Registration`,
+            `${firstName} ${lastName} registered as a ${roleLabel} and is awaiting approval.`,
+          ]
+        ).catch(() => {});
+      }
+    }
+
     res.status(201).json({ data: { user, token } });
   } catch (err) {
     console.error('register error:', err);
@@ -1103,6 +1122,24 @@ app.post('/api/auth/google', async (req, res) => {
         [id, firstName, lastName, email, phone ? String(phone).trim() || null : null, googleId, avatar, assignedRole, kycStatus, isVerified, approvalStatus]
       );
       user = insertResult.rows[0];
+
+      // Notify admins when a vetting-required role registers via Google
+      if (vetting) {
+        const roleLabel = assignedRole === 'landlord' ? 'Landlord' : assignedRole === 'property_manager' ? 'Property Manager' : 'Agent';
+        const admins = await pool.query(`SELECT id FROM users WHERE role = 'admin' AND is_suspended = false`);
+        for (const a of admins.rows) {
+          await pool.query(
+            `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+             VALUES ($1, $2, 'kyc_review', $3, $4, false, '/admin/vetting')`,
+            [
+              uuidv4(),
+              a.id,
+              `New ${roleLabel} Registration (Google)`,
+              `${firstName} ${lastName} registered via Google as a ${roleLabel} and is awaiting approval.`,
+            ]
+          ).catch(() => {});
+        }
+      }
     }
 
     if (user.is_suspended) {
@@ -2345,7 +2382,11 @@ app.get('/api/documents', auth, requireAnyPerm([['documents', 'viewOwnDocuments'
     let query = 'SELECT * FROM documents WHERE 1=1';
     const params = [];
     let i = 1;
-    if (!hasPermission(req.effectivePermissions, 'documents', 'viewAllDocuments')) {
+    // Admin can filter by owner_id via query param
+    if (req.query.ownerId && hasPermission(req.effectivePermissions, 'documents', 'viewAllDocuments')) {
+      query += ` AND owner_id = $${i}`;
+      params.push(req.query.ownerId); i++;
+    } else if (!hasPermission(req.effectivePermissions, 'documents', 'viewAllDocuments')) {
       query += ` AND owner_id = $${i}`;
       params.push(req.user.id); i++;
     }
@@ -2370,6 +2411,23 @@ app.post('/api/documents', auth, requirePerm('documents', 'uploadDocument'), asy
        ownerRole || user.role, name, category, fileUrl || '', fileType || 'application/octet-stream',
        fileSize || 0, expiresAt || null]
     );
+
+    // Notify all admins about the new document pending review
+    const uploaderName = ownerName || `${user.first_name} ${user.last_name}`;
+    const admins = await pool.query(`SELECT id FROM users WHERE role = 'admin' AND is_suspended = false`);
+    for (const a of admins.rows) {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+         VALUES ($1, $2, 'document_review', $3, $4, false, '/documents')`,
+        [
+          uuidv4(),
+          a.id,
+          'New Document Uploaded',
+          `${uploaderName} uploaded "${name}" (${category}) for review.`,
+        ]
+      ).catch(() => {});
+    }
+
     res.status(201).json({ data: formatDocument(result.rows[0]) });
   } catch (err) {
     console.error(err);
@@ -2711,6 +2769,24 @@ app.post('/api/agent-applications', async (req, res) => {
        JSON.stringify(Array.isArray(additionalDocs) ? additionalDocs : []),
        experience, JSON.stringify(districts || []), motivation]
     );
+
+    // Notify all admins about the new application requiring review
+    const roleLabel = role === 'landlord' ? 'Landlord' : role === 'property_manager' ? 'Property Manager' : 'Agent';
+    const applicantName = `${firstName} ${lastName}`.trim();
+    const admins = await pool.query(`SELECT id FROM users WHERE role = 'admin' AND is_suspended = false`);
+    for (const a of admins.rows) {
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+         VALUES ($1, $2, 'kyc_review', $3, $4, false, '/admin/agents')`,
+        [
+          uuidv4(),
+          a.id,
+          `New ${roleLabel} Application`,
+          `${applicantName} has submitted a ${roleLabel} application with documents for review.`,
+        ]
+      ).catch(() => {});
+    }
+
     res.status(201).json({ data: formatAgentApplication(result.rows[0]) });
   } catch (err) {
     console.error(err);

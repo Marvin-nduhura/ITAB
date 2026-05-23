@@ -9,20 +9,28 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Attach token
+// Attach token — read from Zustand persist store (single source of truth)
 api.interceptors.request.use(config => {
-  const token = localStorage.getItem('itab_token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
+  try {
+    const raw = localStorage.getItem('itab_auth');
+    if (raw) {
+      const parsed = JSON.parse(raw) as { state?: { token?: string } };
+      const token = parsed?.state?.token;
+      if (token) config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch { /* ignore parse errors */ }
   return config;
 });
 
-// Handle 401
+// Handle 401 — clear auth token and redirect to login.
+// All other store data is in-memory only (no localStorage), so nothing else to clear.
 api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('itab_token');
-      localStorage.removeItem('itab_user');
+      try {
+        localStorage.removeItem('itab_auth');
+      } catch { /* ignore */ }
       window.location.href = '/login';
     }
     return Promise.reject(err);
