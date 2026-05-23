@@ -2765,6 +2765,20 @@ app.get('/api/agent-applications', auth, requireRole('admin'), requirePerm('admi
   }
 });
 
+// Authenticated user fetches their own application (for pending/rejected status display)
+app.get('/api/agent-applications/my', auth, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM agent_applications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [req.user.id]
+    );
+    if (!result.rows.length) return res.json({ data: null });
+    res.json({ data: formatAgentApplication(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.post('/api/agent-applications', async (req, res) => {
   try {
     const {
@@ -2809,7 +2823,7 @@ app.post('/api/agent-applications', async (req, res) => {
 app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), requirePerm('admin', 'approveAgentApplication'), async (req, res) => {
   try {
     const adminNote = req.body.adminNote ?? req.body.note ?? '';
-    const appRow = await pool.query('SELECT user_id FROM agent_applications WHERE id=$1', [req.params.id]);
+    const appRow = await pool.query('SELECT user_id, role FROM agent_applications WHERE id=$1', [req.params.id]);
     const result = await pool.query(
       "UPDATE agent_applications SET status='approved', admin_note=$1, reviewed_at=NOW() WHERE id=$2 RETURNING *",
       [adminNote, req.params.id]
@@ -2821,6 +2835,19 @@ app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), req
         `UPDATE users SET approval_status='approved', kyc_status='approved', is_verified=true, updated_at=NOW() WHERE id=$1`,
         [uid]
       ).catch(() => {});
+      // Notify the applicant of approval
+      const roleLabel = appRow.rows[0]?.role === 'landlord' ? 'Landlord'
+        : appRow.rows[0]?.role === 'property_manager' ? 'Property Manager' : 'Agent';
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+         VALUES ($1, $2, 'kyc_approved', $3, $4, false, '/dashboard')`,
+        [
+          uuidv4(),
+          uid,
+          `${roleLabel} Application Approved!`,
+          `Congratulations! Your ${roleLabel} application has been approved. You now have full access to the platform.`,
+        ]
+      ).catch(() => {});
     }
     res.json({ data: formatAgentApplication(result.rows[0]) });
   } catch (err) {
@@ -2831,7 +2858,7 @@ app.patch('/api/agent-applications/:id/approve', auth, requireRole('admin'), req
 app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), requirePerm('admin', 'rejectAgentApplication'), async (req, res) => {
   try {
     const adminNote = req.body.adminNote ?? req.body.note ?? '';
-    const appRow = await pool.query('SELECT user_id FROM agent_applications WHERE id=$1', [req.params.id]);
+    const appRow = await pool.query('SELECT user_id, first_name, last_name, role FROM agent_applications WHERE id=$1', [req.params.id]);
     const result = await pool.query(
       "UPDATE agent_applications SET status='rejected', admin_note=$1, reviewed_at=NOW() WHERE id=$2 RETURNING *",
       [adminNote, req.params.id]
@@ -2842,6 +2869,21 @@ app.patch('/api/agent-applications/:id/reject', auth, requireRole('admin'), requ
       await pool.query(
         `UPDATE users SET approval_status='rejected', kyc_status='rejected', updated_at=NOW() WHERE id=$1`,
         [uid]
+      ).catch(() => {});
+      // Notify the applicant with the rejection reason
+      const roleLabel = appRow.rows[0]?.role === 'landlord' ? 'Landlord'
+        : appRow.rows[0]?.role === 'property_manager' ? 'Property Manager' : 'Agent';
+      await pool.query(
+        `INSERT INTO notifications (id, user_id, type, title, body, is_read, action_url)
+         VALUES ($1, $2, 'kyc_rejected', $3, $4, false, '/documents')`,
+        [
+          uuidv4(),
+          uid,
+          `${roleLabel} Application Rejected`,
+          adminNote
+            ? `Your application was rejected. Reason: ${adminNote}. Please go to Documents to upload corrected files and resubmit.`
+            : `Your application was rejected. Please go to Documents to upload corrected files and resubmit.`,
+        ]
       ).catch(() => {});
     }
     res.json({ data: formatAgentApplication(result.rows[0]) });

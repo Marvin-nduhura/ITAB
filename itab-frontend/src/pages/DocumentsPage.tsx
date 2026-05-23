@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText, Upload, Download, CheckCircle2, Clock, XCircle,
   Shield, Home, User, AlertTriangle, Eye, Trash2, Plus, Search,
+  RefreshCw, RotateCcw, UploadCloud,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -14,7 +15,10 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { useAuthStore } from '../store/authStore';
 import { useDocumentStore, type DocCategory, type Document } from '../store/documentStore';
 import { useUserStore } from '../store/userStore';
+import { documentsApi, agentApplicationsApi } from '../lib/api';
 import { formatDate, roleLabels } from '../lib/utils';
+import { isAwaitingApproval } from '../lib/rbac';
+import type { AgentApplication } from '../store/userStore';
 import toast from 'react-hot-toast';
 
 const categoryConfig: Record<DocCategory, { label: string; icon: React.ReactNode; color: string }> = {
@@ -40,9 +44,39 @@ function formatFileSize(bytes: number): string {
 export function DocumentsPage() {
   const { user } = useAuthStore();
   const { approveKYC, rejectKYC } = useUserStore();
-  const { documents, addDocument, approveDocument, rejectDocument, deleteDocument, getDocsByOwner } = useDocumentStore();
+  const { documents, setDocuments, addDocument, approveDocument, rejectDocument, deleteDocument, getDocsByOwner } = useDocumentStore();
 
   const isAdmin = user?.role === 'admin' || user?.role === 'property_manager';
+  const isPendingUser = !!user && isAwaitingApproval(user);
+  const VETTING_ROLES = ['landlord', 'agent', 'property_manager'];
+  const isVettingRole = !!user && VETTING_ROLES.includes(user.role);
+
+  // Fetch the user's own application (for pending/rejected status)
+  const [myApplication, setMyApplication] = useState<AgentApplication | null>(null);
+  useEffect(() => {
+    if (isVettingRole && isPendingUser) {
+      agentApplicationsApi.getMyApplication()
+        .then(res => {
+          const app = (res.data as { data: AgentApplication | null }).data;
+          setMyApplication(app);
+        })
+        .catch(() => {});
+    }
+  }, [user?.id, user?.approvalStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Fetch from backend on mount ──────────────────────────────────────────
+  const [refreshing, setRefreshing] = useState(false);
+  const fetchDocs = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await documentsApi.list();
+      const data = (res.data as { data: Document[] }).data;
+      if (Array.isArray(data)) setDocuments(data);
+    } catch { /* keep cached */ }
+    finally { setRefreshing(false); }
+  }, [setDocuments]);
+
+  useEffect(() => { fetchDocs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Admin sees all docs; others see only their own
   const visibleDocs = isAdmin ? documents : getDocsByOwner(user?.id || '');
@@ -50,6 +84,7 @@ export function DocumentsPage() {
   const [activeCategory, setActiveCategory] = useState<DocCategory | 'all' | 'pending'>('all');
   const [searchQuery, setSearchQuery]       = useState('');
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [resubmitDoc, setResubmitDoc]       = useState<Document | null>(null); // for resubmit flow
   const [viewDoc, setViewDoc]               = useState<Document | null>(null);
   const [reviewDoc, setReviewDoc]           = useState<Document | null>(null);
   const [rejectNotes, setRejectNotes]       = useState('');
@@ -71,11 +106,17 @@ export function DocumentsPage() {
 
   const pendingCount = visibleDocs.filter(d => d.status === 'pending').length;
 
-  // ── Upload ────────────────────────────────────────────────────────────────
+  // ── Upload / Resubmit ─────────────────────────────────────────────────────
   const handleUpload = async () => {
     if (!uploadName.trim()) { toast.error('Please enter a document name'); return; }
     if (uploadFiles.length === 0) { toast.error('Please select a file to upload'); return; }
     setUploading(true);
+
+    // If resubmitting a rejected doc, delete the old one first
+    if (resubmitDoc) {
+      await deleteDocument(resubmitDoc.id);
+    }
+
     await addDocument({
       ownerId:   user?.id || '',
       ownerName: `${user?.firstName} ${user?.lastName}`,
@@ -88,9 +129,19 @@ export function DocumentsPage() {
     });
     setUploading(false);
     setShowUploadModal(false);
+    setResubmitDoc(null);
     setUploadFiles([]);
     setUploadName('');
-    toast.success('Document uploaded! It will be reviewed by the admin shortly.');
+    toast.success(resubmitDoc ? 'Document resubmitted! Admin will review it shortly.' : 'Document uploaded! It will be reviewed by the admin shortly.');
+  };
+
+  // Open upload modal pre-filled for resubmission
+  const openResubmit = (doc: Document) => {
+    setResubmitDoc(doc);
+    setUploadName(doc.name);
+    setUploadCategory(doc.category);
+    setUploadFiles([]);
+    setShowUploadModal(true);
   };
 
   // ── Admin: Approve ────────────────────────────────────────────────────────
@@ -142,10 +193,84 @@ export function DocumentsPage() {
             {isAdmin ? `${visibleDocs.length} total · ` : ''}{pendingCount} pending review
           </p>
         </div>
-        <Button icon={<Plus size={16} />} onClick={() => setShowUploadModal(true)}>
-          Upload Document
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />}
+            onClick={fetchDocs}
+            disabled={refreshing}
+          >
+            Refresh
+          </Button>
+          <Button icon={<Plus size={16} />} onClick={() => { setResubmitDoc(null); setUploadName(''); setUploadCategory('kyc'); setUploadFiles([]); setShowUploadModal(true); }}>
+            Upload Document
+          </Button>
+        </div>
       </div>
+
+      {/* ── Account approval status banner (pending/rejected vetting users) ── */}
+      {isPendingUser && isVettingRole && (
+        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+          {user.approvalStatus === 'rejected' ? (
+            <div className="p-5 rounded-2xl border-2 border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20">
+              <div className="flex items-start gap-3 mb-4">
+                <XCircle size={22} className="text-red-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-red-900 dark:text-red-100 text-base">Your application was rejected</p>
+                  {myApplication?.adminNote ? (
+                    <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                      <strong>Admin reason:</strong> {myApplication.adminNote}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                      Your submitted documents were not accepted. Please upload corrected documents below.
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 bg-white dark:bg-slate-800 rounded-xl border border-red-200 dark:border-red-700 space-y-3">
+                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  <UploadCloud size={16} className="text-primary-600" />
+                  What to do next:
+                </p>
+                <ol className="text-sm text-slate-600 dark:text-slate-400 space-y-1.5 list-decimal list-inside">
+                  <li>Click <strong>"Upload Document"</strong> above to upload a new, clearer copy of your National ID or supporting documents</li>
+                  <li>Make sure the document is clear, not expired, and matches your name</li>
+                  <li>After uploading, contact support at <strong>support@itab.ug</strong> to request a re-review</li>
+                </ol>
+              </div>
+            </div>
+          ) : (
+            <div className="p-5 rounded-2xl border-2 border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20">
+              <div className="flex items-start gap-3">
+                <Clock size={22} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-bold text-amber-900 dark:text-amber-100 text-base">Account pending admin approval</p>
+                  <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                    Your documents are being reviewed. You can upload additional supporting documents below to strengthen your application.
+                  </p>
+                  {myApplication && (
+                    <div className="mt-2 flex items-center gap-3 flex-wrap text-xs text-amber-700 dark:text-amber-400">
+                      <Badge variant="yellow">⏳ Under Review</Badge>
+                      {myApplication.nationalIdDoc && (
+                        <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                          <CheckCircle2 size={11} /> National ID submitted
+                        </span>
+                      )}
+                      {myApplication.additionalDocs && myApplication.additionalDocs.length > 0 && (
+                        <span className="flex items-center gap-1">
+                          <FileText size={11} /> {myApplication.additionalDocs.length} additional doc{myApplication.additionalDocs.length !== 1 ? 's' : ''} submitted
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </motion.div>
+      )}
 
       {/* Pending alert */}
       <AnimatePresence>
@@ -281,7 +406,8 @@ export function DocumentsPage() {
                           <Download size={15} />
                         </button>
                       )}
-                      {(isAdmin || doc.ownerId === user?.id) && (
+                      {/* Delete: admin can delete any; user can delete their own pending/rejected docs; approved docs can only be deleted by admin */}
+                      {(isAdmin || (doc.ownerId === user?.id && doc.status !== 'approved')) && (
                         <button onClick={() => { deleteDocument(doc.id); toast('Document removed'); }}
                           className="p-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-900/20 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
                           <Trash2 size={15} />
@@ -308,8 +434,20 @@ export function DocumentsPage() {
                     </div>
                   )}
                   {doc.status === 'rejected' && (
-                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex items-center gap-1.5 text-xs text-red-500">
-                      <AlertTriangle size={12} /> Rejected — please upload a corrected version
+                    <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-xs text-red-500">
+                        <AlertTriangle size={12} /> Rejected — please upload a corrected version
+                      </div>
+                      {doc.ownerId === user?.id && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon={<RotateCcw size={13} />}
+                          onClick={() => openResubmit(doc)}
+                        >
+                          Resubmit
+                        </Button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -320,15 +458,25 @@ export function DocumentsPage() {
       )}
 
       {/* ── Upload Modal ──────────────────────────────────────────────────── */}
-      <Modal open={showUploadModal} onClose={() => { setShowUploadModal(false); setUploadFiles([]); setUploadName(''); }}
-        title="Upload Document" size="md"
+      <Modal open={showUploadModal} onClose={() => { setShowUploadModal(false); setResubmitDoc(null); setUploadFiles([]); setUploadName(''); }}
+        title={resubmitDoc ? `Resubmit: ${resubmitDoc.name}` : 'Upload Document'} size="md"
         footer={
           <>
-            <Button variant="secondary" onClick={() => { setShowUploadModal(false); setUploadFiles([]); setUploadName(''); }}>Cancel</Button>
-            <Button loading={uploading} onClick={handleUpload} icon={<Upload size={14} />}>Upload</Button>
+            <Button variant="secondary" onClick={() => { setShowUploadModal(false); setResubmitDoc(null); setUploadFiles([]); setUploadName(''); }}>Cancel</Button>
+            <Button loading={uploading} onClick={handleUpload} icon={resubmitDoc ? <RotateCcw size={14} /> : <Upload size={14} />}>
+              {resubmitDoc ? 'Resubmit Document' : 'Upload'}
+            </Button>
           </>
         }>
         <div className="space-y-4">
+          {resubmitDoc && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                <strong>Resubmitting:</strong> {resubmitDoc.name}
+                {resubmitDoc.adminNotes && <><br />Admin note: <em>{resubmitDoc.adminNotes}</em></>}
+              </p>
+            </div>
+          )}
           <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
             <p className="text-xs text-blue-700 dark:text-blue-300">Accepted: PDF, JPG, PNG, DOCX. Max 10MB.</p>
           </div>

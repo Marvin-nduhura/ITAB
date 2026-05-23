@@ -231,11 +231,12 @@ export const auditLogsApi = {
 
 // ─── Agent Applications ───────────────────────────────────────────────────────
 export const agentApplicationsApi = {
-  list:       (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/agent-applications', { params }),
-  submit:     (data: unknown) => api.post<ApiResponse<unknown>>('/agent-applications', data),
-  approve:    (id: string, adminNote?: string) => api.patch(`/agent-applications/${id}/approve`, { adminNote }),
-  reject:     (id: string, adminNote?: string) => api.patch(`/agent-applications/${id}/reject`, { adminNote }),
-  updateDocs: (id: string, data: { nationalIdDoc?: string; additionalDocs?: { name: string; dataUrl: string; type: string }[] }) =>
+  list:             (params?: Record<string, unknown>) => api.get<ApiResponse<unknown[]>>('/agent-applications', { params }),
+  getMyApplication: () => api.get<ApiResponse<unknown>>('/agent-applications/my'),
+  submit:           (data: unknown) => api.post<ApiResponse<unknown>>('/agent-applications', data),
+  approve:          (id: string, adminNote?: string) => api.patch(`/agent-applications/${id}/approve`, { adminNote }),
+  reject:           (id: string, adminNote?: string) => api.patch(`/agent-applications/${id}/reject`, { adminNote }),
+  updateDocs:       (id: string, data: { nationalIdDoc?: string; additionalDocs?: { name: string; dataUrl: string; type: string }[] }) =>
     api.patch<ApiResponse<unknown>>(`/agent-applications/${id}/docs`, data),
 };
 

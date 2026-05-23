@@ -1,7 +1,9 @@
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   Building2, Users, Wrench, DollarSign, TrendingUp, Calendar,
   AlertCircle, CheckCircle2, Clock, Home, Star, Briefcase, CreditCard, Bell,
+  FileText, UploadCloud, XCircle,
 } from 'lucide-react';
 import { StatCard } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -21,6 +23,8 @@ import {
   isAwaitingApproval,
 } from '../lib/rbac';
 import { useNavigate } from 'react-router-dom';
+import { agentApplicationsApi } from '../lib/api';
+import type { AgentApplication } from '../store/userStore';
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.07 } } };
 const item = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0 } };
@@ -31,6 +35,20 @@ export function DashboardPage() {
   const { vendors, jobs } = useVendorStore();
   const { inspections: allInspections, maintenance: allMaintenance, payments: allPayments, notices: allNotices } = useDataStore();
   const navigate = useNavigate();
+
+  // Fetch the user's own application status (for pending/rejected users)
+  const [myApplication, setMyApplication] = useState<AgentApplication | null>(null);
+  const VETTING_ROLES = ['landlord', 'agent', 'property_manager'];
+  useEffect(() => {
+    if (user && VETTING_ROLES.includes(user.role) && isAwaitingApproval(user)) {
+      agentApplicationsApi.getMyApplication()
+        .then(res => {
+          const app = (res.data as { data: AgentApplication | null }).data;
+          setMyApplication(app);
+        })
+        .catch(() => {});
+    }
+  }, [user?.id, user?.approvalStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const properties    = filterPropertiesForUser(allProperties, user);
   const myInspections = filterInspectionsForUser(allInspections, user, allProperties);
@@ -135,17 +153,91 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {/* ── Account pending / rejected banner ─────────────────────────────── */}
       {user && isAwaitingApproval(user) && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="p-4 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/25 text-amber-900 dark:text-amber-100 text-sm"
-        >
-          <p className="font-semibold">Account pending approval</p>
-          <p className="mt-1 text-amber-800/90 dark:text-amber-200/90">
-            You can browse published listings, use <strong>Messages</strong>, and upload files under <strong>Documents</strong> for verification.
-            Other actions stay disabled until an admin approves your account.
-          </p>
+        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+          {user.approvalStatus === 'rejected' ? (
+            /* ── REJECTED ── */
+            <div className="p-5 rounded-2xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20">
+              <div className="flex items-start gap-3">
+                <XCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-red-900 dark:text-red-100">Application rejected</p>
+                  {myApplication?.adminNote ? (
+                    <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                      <strong>Reason:</strong> {myApplication.adminNote}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                      Your documents were not accepted. Please upload corrected documents and resubmit.
+                    </p>
+                  )}
+                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">
+                    Go to <strong>Documents</strong> to upload new files, then contact support or resubmit your application.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 flex gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  icon={<UploadCloud size={14} />}
+                  onClick={() => navigate('/documents')}
+                >
+                  Upload New Documents
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<FileText size={14} />}
+                  onClick={() => navigate('/documents')}
+                >
+                  View My Documents
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* ── PENDING ── */
+            <div className="p-5 rounded-2xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/25">
+              <div className="flex items-start gap-3">
+                <Clock size={20} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-amber-900 dark:text-amber-100">Account pending approval</p>
+                  <p className="mt-1 text-sm text-amber-800/90 dark:text-amber-200/90">
+                    Your documents are under review. You can browse published listings, use{' '}
+                    <strong>Messages</strong>, and upload additional files under{' '}
+                    <strong>Documents</strong> while you wait.
+                  </p>
+                  {myApplication && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-300">
+                      <Badge variant="yellow">
+                        {myApplication.status === 'pending' ? '⏳ Under Review' : myApplication.status}
+                      </Badge>
+                      {myApplication.nationalIdDoc && (
+                        <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                          <CheckCircle2 size={11} /> National ID submitted
+                        </span>
+                      )}
+                      {myApplication.additionalDocs && myApplication.additionalDocs.length > 0 && (
+                        <span className="flex items-center gap-1">
+                          <FileText size={11} /> {myApplication.additionalDocs.length} additional doc{myApplication.additionalDocs.length !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="mt-4 flex gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<UploadCloud size={14} />}
+                  onClick={() => navigate('/documents')}
+                >
+                  Upload More Documents
+                </Button>
+              </div>
+            </div>
+          )}
         </motion.div>
       )}
       {/* Header */}
