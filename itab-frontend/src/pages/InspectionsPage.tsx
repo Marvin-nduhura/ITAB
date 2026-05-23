@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, CheckCircle2, XCircle, Clock, AlertCircle,
-  Download, ThumbsDown, ThumbsUp, Info, Building2, QrCode,
+  Download, ThumbsDown, ThumbsUp, Info, Building2, QrCode, RefreshCw,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -112,12 +112,26 @@ function DeclineLeaseModal({ open, inspection, onClose, onConfirm }: DeclineModa
 export function InspectionsPage() {
   const { user } = useAuthStore();
   const navigate = useNavigate();
-  const { inspections: allInspections } = useDataStore();
+  const { inspections: allInspections, setInspections: setStoreInspections } = useDataStore();
   const { properties: allProperties } = usePropertyStore();
-  // Only show inspections this user is allowed to see
-  const [inspections, setInspections] = useState<Inspection[]>(() =>
-    filterInspectionsForUser(allInspections, user, allProperties)
-  );
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Fetch fresh from Render DB on mount
+  const fetchInspections = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await inspectionsApi.list();
+      const data = (res.data as { data: Inspection[] }).data;
+      if (Array.isArray(data)) setStoreInspections(data);
+    } catch { /* keep cached */ }
+    finally { setRefreshing(false); }
+  }, [setStoreInspections]);
+
+  useEffect(() => { fetchInspections(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Always derive from store (updated after fetch)
+  const inspections = filterInspectionsForUser(allInspections, user, allProperties);
+
   const [selected, setSelected] = useState<Inspection | null>(null);
   const [showDetail, setShowDetail] = useState(false);
   const [showDeclineModal, setShowDeclineModal] = useState(false);
@@ -139,24 +153,29 @@ export function InspectionsPage() {
     return <Clock size={16} className="text-yellow-500" />;
   };
 
+  // All mutations write to Render DB first, then refresh store
   const handleConfirm = async (id: string) => {
-    setInspections(prev => prev.map(i => i.id === id ? { ...i, status: 'confirmed' as const } : i));
-    try { await inspectionsApi.confirm(id); } catch { /* queued offline */ }
-    toast.success('Inspection confirmed! Tenant has been notified.');
+    try {
+      await inspectionsApi.confirm(id);
+      await fetchInspections();
+      toast.success('Inspection confirmed! Tenant has been notified.');
+    } catch { toast.error('Failed to confirm. Please try again.'); }
   };
 
   const handleCancel = async (id: string) => {
-    setInspections(prev => prev.map(i => i.id === id ? { ...i, status: 'cancelled' as const } : i));
-    try { await inspectionsApi.cancel(id); } catch { /* queued offline */ }
-    toast('Inspection cancelled. Fee is non-refundable.', { icon: '⚠️' });
+    try {
+      await inspectionsApi.cancel(id);
+      await fetchInspections();
+      toast('Inspection cancelled. Fee is non-refundable.', { icon: '⚠️' });
+    } catch { toast.error('Failed to cancel. Please try again.'); }
   };
 
   const handleNoShow = async (id: string) => {
-    setInspections(prev => prev.map(i =>
-      i.id === id ? { ...i, status: 'no_show' as const, noShowCount: i.noShowCount + 1 } : i
-    ));
-    try { await inspectionsApi.noShow(id); } catch { /* queued offline */ }
-    toast.error('Tenant marked as no-show. Property remains available.');
+    try {
+      await inspectionsApi.noShow(id);
+      await fetchInspections();
+      toast.error('Tenant marked as no-show. Property remains available.');
+    } catch { toast.error('Failed to update. Please try again.'); }
   };
 
   const handleDeclineLease = (insp: Inspection) => {
@@ -164,24 +183,12 @@ export function InspectionsPage() {
     setShowDeclineModal(true);
   };
 
-  const confirmDecline = (reason: string) => {
-    if (!declineTarget) return;
-    setInspections(prev => prev.map(i =>
-      i.id === declineTarget.id
-        ? {
-            ...i,
-            leaseDeclined: true,
-            leaseDeclinedReason: reason,
-            leaseDeclinedAt: new Date().toISOString(),
-            // Property status stays 'published' — handled by property store in real app
-          }
-        : i
-    ));
+  const confirmDecline = (_reason: string) => {
+    // Decline is a local UI state — the property stays published on the backend
     setShowDeclineModal(false);
     setDeclineTarget(null);
     toast('Lease declined. The property is still available for other tenants.', {
-      icon: '🏠',
-      duration: 5000,
+      icon: '🏠', duration: 5000,
     });
   };
 
@@ -195,11 +202,16 @@ export function InspectionsPage() {
             {upcoming.length} upcoming · {past.length} completed · {declined.length} declined
           </p>
         </div>
-        {user?.role === 'tenant' && (
-          <Button icon={<Calendar size={16} />} onClick={() => navigate('/search')}>
-            Find Properties
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" icon={<RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />} onClick={fetchInspections} disabled={refreshing}>
+            Refresh
           </Button>
-        )}
+          {user?.role === 'tenant' && (
+            <Button icon={<Calendar size={16} />} onClick={() => navigate('/search')}>
+              Find Properties
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -352,9 +364,11 @@ export function InspectionsPage() {
                     <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 flex gap-2">
                       <Button size="sm" icon={<CheckCircle2 size={13} />}
                         onClick={async () => {
-                          setInspections(prev => prev.map(i => i.id === insp.id ? { ...i, status: 'completed' as const } : i));
-                          try { await inspectionsApi.confirm(insp.id); } catch { /* offline */ }
-                          toast.success('Inspection marked as completed.');
+                          try {
+                            await inspectionsApi.confirm(insp.id);
+                            await fetchInspections();
+                            toast.success('Inspection marked as completed.');
+                          } catch { toast.error('Failed to update.'); }
                         }}>
                         Mark Completed
                       </Button>

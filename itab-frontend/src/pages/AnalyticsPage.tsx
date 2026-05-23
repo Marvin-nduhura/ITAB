@@ -1,13 +1,17 @@
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { TrendingUp, Building2, DollarSign, Calendar, Users, Scale, Receipt, AlertCircle } from 'lucide-react';
+import { TrendingUp, Building2, DollarSign, Calendar, Users, Scale, Receipt, AlertCircle, RefreshCw } from 'lucide-react';
 import { StatCard } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
 import { formatCurrency } from '../lib/utils';
 import { useAuthStore } from '../store/authStore';
 import { usePropertyStore } from '../store/propertyStore';
 import { useUserStore } from '../store/userStore';
 import { usePaymentStore } from '../store/paymentStore';
 import { useDisputeStore } from '../store/disputeStore';
+import { useDataStore } from '../store/dataStore';
 import { filterPropertiesForUser } from '../lib/rbac';
+import { analyticsApi } from '../lib/api';
 
 // Simple bar chart component
 function BarChart({ data, label }: { data: { label: string; value: number; color: string }[]; label: string }) {
@@ -34,18 +38,42 @@ export function AnalyticsPage() {
   const { users } = useUserStore();
   const { transactions, getPlatformRevenue } = usePaymentStore();
   const { disputes } = useDisputeStore();
-  const isAdmin = user?.role === 'admin';
+  const { payouts } = useDataStore();
+  const isAdminUser = user?.role === 'admin';
+
+  // Backend analytics stats
+  const [apiStats, setApiStats] = useState<{
+    totalProperties: number; vacantProperties: number; occupiedProperties: number;
+    totalTenants: number; pendingMaintenance: number; monthlyRevenue: number;
+    pendingPayouts: number; inspectionFeeRevenue: number; conversionRate: number;
+  } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchStats = async () => {
+    setRefreshing(true);
+    try {
+      const res = await analyticsApi.dashboard();
+      const d = (res.data as { data: typeof apiStats }).data;
+      if (d) setApiStats(d);
+    } catch { /* keep local */ }
+    finally { setRefreshing(false); }
+  };
+
+  useEffect(() => { fetchStats(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Scope analytics to properties this user manages/owns
   const properties = filterPropertiesForUser(allProperties, user);
-  const stats = {
+
+  const stats = apiStats ?? {
     totalProperties:      properties.length,
     vacantProperties:     properties.filter(p => p.status === 'published').length,
     occupiedProperties:   properties.filter(p => p.status === 'rented').length,
     monthlyRevenue:       0,
     conversionRate:       properties.length > 0 ? Math.round((properties.filter(p => p.status === 'rented').length / properties.length) * 100) : 0,
     inspectionFeeRevenue: 0,
-    pendingPayouts:       0,
+    pendingPayouts:       payouts.filter(p => p.status === 'pending').length,
+    totalTenants:         users.filter(u => u.role === 'tenant').length,
+    pendingMaintenance:   0,
   };
 
   const platformRevenue = getPlatformRevenue();
@@ -85,6 +113,7 @@ export function AnalyticsPage() {
         <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Analytics</h1>
         <p className="text-sm text-slate-500 mt-0.5">Business performance overview</p>
       </div>
+      <Button size="sm" variant="secondary" icon={<RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />} onClick={fetchStats} disabled={refreshing}>Refresh</Button>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -95,7 +124,7 @@ export function AnalyticsPage() {
       </div>
 
       {/* Admin-only platform-wide stats */}
-      {isAdmin && (
+      {isAdminUser && (
         <div className="space-y-4">
           <h2 className="font-bold text-slate-900 dark:text-slate-100">Platform-Wide Overview</h2>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

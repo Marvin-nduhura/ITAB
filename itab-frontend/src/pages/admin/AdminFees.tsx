@@ -73,18 +73,6 @@ const DEFAULT_ACCOUNTS: CompanyAccounts = {
   transferFrequency: 'weekly',
 };
 
-const STORAGE_KEY_FEES = 'itab_fee_config';
-const STORAGE_KEY_ACCOUNTS = 'itab_company_accounts';
-
-function loadFromStorage<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? { ...fallback, ...JSON.parse(raw) } : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 function num(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : fallback;
@@ -131,21 +119,6 @@ function companyAccountsFromApi(raw: Record<string, unknown> | null | undefined)
       ? (raw.transferFrequency as CompanyAccounts['transferFrequency'])
       : DEFAULT_ACCOUNTS.transferFrequency,
   };
-}
-
-function isFeeConfigEmpty(api: Record<string, unknown>): boolean {
-  return !api || Object.keys(api).length === 0;
-}
-
-function isCompanyAccountsEffectivelyEmpty(api: Record<string, unknown>): boolean {
-  if (!api || Object.keys(api).length === 0) return true;
-  const a = companyAccountsFromApi(api);
-  return (
-    !a.primaryMtnPhone &&
-    !a.primaryAirtelPhone &&
-    !a.primaryBankName &&
-    !a.primaryAccountNumber
-  );
 }
 
 // ─── Method options ───────────────────────────────────────────────────────────
@@ -244,30 +217,15 @@ export function AdminFees() {
       try {
         const res = await platformSettingsApi.get();
         const d = res.data.data;
-        let nextFees = feeConfigFromApi(d.feeConfig as Record<string, unknown>);
-        let nextAccounts = companyAccountsFromApi(d.companyAccounts as Record<string, unknown>);
-        const legacyFees = loadFromStorage(STORAGE_KEY_FEES, DEFAULT_FEES);
-        const legacyAccounts = loadFromStorage(STORAGE_KEY_ACCOUNTS, DEFAULT_ACCOUNTS);
-        if (isFeeConfigEmpty(d.feeConfig as Record<string, unknown>) && JSON.stringify(legacyFees) !== JSON.stringify(DEFAULT_FEES)) {
-          nextFees = { ...DEFAULT_FEES, ...legacyFees };
-        }
-        if (isCompanyAccountsEffectivelyEmpty(d.companyAccounts as Record<string, unknown>)) {
-          const hasLegacy =
-            legacyAccounts.primaryMtnPhone ||
-            legacyAccounts.primaryAirtelPhone ||
-            legacyAccounts.primaryBankName ||
-            legacyAccounts.primaryAccountNumber;
-          if (hasLegacy) nextAccounts = { ...DEFAULT_ACCOUNTS, ...legacyAccounts };
-        }
+        const nextFees = feeConfigFromApi(d.feeConfig as Record<string, unknown>);
+        const nextAccounts = companyAccountsFromApi(d.companyAccounts as Record<string, unknown>);
         if (!cancelled) {
           setFees(nextFees);
           setCompanyAccounts(nextAccounts);
         }
       } catch {
         if (!cancelled) {
-          toast.error('Could not load settings from server. Showing cached copy if available.');
-          setFees(loadFromStorage(STORAGE_KEY_FEES, DEFAULT_FEES));
-          setCompanyAccounts(loadFromStorage(STORAGE_KEY_ACCOUNTS, DEFAULT_ACCOUNTS));
+          toast.error('Could not load settings from server. Please check your connection.');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -296,7 +254,6 @@ export function AdminFees() {
     setSaving(true);
     try {
       await platformSettingsApi.put({ feeConfig: fees });
-      localStorage.setItem(STORAGE_KEY_FEES, JSON.stringify(fees));
       setSaved(true);
       toast.success('Fee configuration saved to server');
       setTimeout(() => setSaved(false), 3000);
@@ -311,7 +268,6 @@ export function AdminFees() {
     setSaving(true);
     try {
       await platformSettingsApi.put({ companyAccounts });
-      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(companyAccounts));
       setSaved(true);
       toast.success('Company accounts saved to server');
       setTimeout(() => setSaved(false), 3000);

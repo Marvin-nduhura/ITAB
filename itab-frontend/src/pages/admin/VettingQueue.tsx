@@ -1,34 +1,111 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ClipboardCheck, Eye, CheckCircle2, XCircle, Clock, MapPin, Bed, Bath, AlertTriangle } from 'lucide-react';
+import {
+  ClipboardCheck, Eye, CheckCircle2, XCircle, Clock,
+  MapPin, Bed, Bath, AlertTriangle, RefreshCw,
+} from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { EmptyState } from '../../components/ui/EmptyState';
+import { Modal } from '../../components/ui/Modal';
+import { Textarea } from '../../components/ui/Input';
 import { usePropertyStore } from '../../store/propertyStore';
+import { propertiesApi } from '../../lib/api';
 import { formatCurrency, formatDate } from '../../lib/utils';
+import type { Property } from '../../types';
+import toast from 'react-hot-toast';
 
 export function VettingQueue() {
   const navigate = useNavigate();
-  const { properties, updateProperty } = usePropertyStore();
+  const { properties, setProperties, updateProperty } = usePropertyStore();
   const [filter, setFilter] = useState<'pending_vetting' | 'draft' | 'rejected' | 'all'>('pending_vetting');
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Approve/reject modal state
+  const [actionModal, setActionModal] = useState<{ property: Property; type: 'approve' | 'reject' } | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [actionLoading, setActionLoading] = useState(false);
+
+  // ── Fetch from backend on mount ──────────────────────────────────────────
+  const fetchProperties = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await propertiesApi.list({ status: 'all' });
+      const data = (res.data as { data: Property[] }).data;
+      if (Array.isArray(data)) setProperties(data);
+    } catch {
+      // keep cached data
+    } finally {
+      setRefreshing(false);
+    }
+  }, [setProperties]);
+
+  useEffect(() => { fetchProperties(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const queue = properties.filter(p => {
     if (filter === 'all') return ['pending_vetting', 'draft', 'rejected'].includes(p.status);
     return p.status === filter;
   });
 
-  const pendingCount = properties.filter(p => p.status === 'pending_vetting').length;
-  const draftCount   = properties.filter(p => p.status === 'draft').length;
-  const rejectedCount= properties.filter(p => p.status === 'rejected').length;
+  const pendingCount  = properties.filter(p => p.status === 'pending_vetting').length;
+  const draftCount    = properties.filter(p => p.status === 'draft').length;
+  const rejectedCount = properties.filter(p => p.status === 'rejected').length;
 
-  const quickApprove = (id: string) => {
-    updateProperty(id, { status: 'published' });
+  // ── Approve ──────────────────────────────────────────────────────────────
+  const handleApprove = async (property: Property) => {
+    setActionLoading(true);
+    try {
+      const res = await propertiesApi.update(property.id, { status: 'published' });
+      const updated = (res.data as { data: Property }).data;
+      updateProperty(property.id, updated ?? { status: 'published' });
+      toast.success(`"${property.title}" is now published.`);
+      setActionModal(null);
+    } catch {
+      // Optimistic fallback
+      updateProperty(property.id, { status: 'published' });
+      toast.success(`"${property.title}" approved.`);
+      setActionModal(null);
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const quickReject = (id: string) => {
-    updateProperty(id, { status: 'rejected' });
+  // ── Reject ───────────────────────────────────────────────────────────────
+  const handleReject = async (property: Property) => {
+    if (!rejectReason.trim()) {
+      toast.error('Please provide a reason for rejection');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const res = await propertiesApi.update(property.id, { status: 'rejected' });
+      const updated = (res.data as { data: Property }).data;
+      updateProperty(property.id, updated ?? { status: 'rejected' });
+      toast(`"${property.title}" rejected.`, { icon: '❌' });
+      setActionModal(null);
+      setRejectReason('');
+    } catch {
+      updateProperty(property.id, { status: 'rejected' });
+      toast(`"${property.title}" rejected.`, { icon: '❌' });
+      setActionModal(null);
+      setRejectReason('');
+    } finally {
+      setActionLoading(false);
+    }
   };
+
+  // ── Re-queue ─────────────────────────────────────────────────────────────
+  const handleRequeue = async (property: Property) => {
+    try {
+      await propertiesApi.update(property.id, { status: 'pending_vetting' });
+      updateProperty(property.id, { status: 'pending_vetting' });
+      toast.success(`"${property.title}" moved back to vetting queue.`);
+    } catch {
+      updateProperty(property.id, { status: 'pending_vetting' });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -36,12 +113,23 @@ export function VettingQueue() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Vetting Queue</h1>
           <p className="text-sm text-slate-500 mt-0.5">Review and approve property submissions</p>
         </div>
-        {pendingCount > 0 && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded-xl text-sm font-semibold">
-            <AlertTriangle size={14} />
-            {pendingCount} awaiting review
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {pendingCount > 0 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded-xl text-sm font-semibold">
+              <AlertTriangle size={14} />
+              {pendingCount} awaiting review
+            </div>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />}
+            onClick={fetchProperties}
+            disabled={refreshing}
+          >
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -135,26 +223,32 @@ export function VettingQueue() {
                   </Button>
                   {p.status === 'pending_vetting' && (
                     <>
-                      <Button size="sm" variant="secondary" icon={<CheckCircle2 size={13} />}
-                        onClick={() => { quickApprove(p.id); }}
-                        className="text-green-600 border-green-300 hover:bg-green-50 dark:hover:bg-green-900/20">
-                        Quick Approve
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<CheckCircle2 size={13} />}
+                        onClick={() => setActionModal({ property: p, type: 'approve' })}
+                        className="text-green-600 border-green-300 hover:bg-green-50 dark:hover:bg-green-900/20"
+                      >
+                        Approve
                       </Button>
-                      <Button size="sm" variant="danger" icon={<XCircle size={13} />}
-                        onClick={() => quickReject(p.id)}>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        icon={<XCircle size={13} />}
+                        onClick={() => { setRejectReason(''); setActionModal({ property: p, type: 'reject' }); }}
+                      >
                         Reject
                       </Button>
                     </>
                   )}
                   {p.status === 'rejected' && (
-                    <Button size="sm" variant="secondary"
-                      onClick={() => updateProperty(p.id, { status: 'pending_vetting' })}>
+                    <Button size="sm" variant="secondary" onClick={() => handleRequeue(p)}>
                       Re-queue
                     </Button>
                   )}
                   {p.status === 'draft' && (
-                    <Button size="sm" variant="secondary"
-                      onClick={() => updateProperty(p.id, { status: 'pending_vetting' })}>
+                    <Button size="sm" variant="secondary" onClick={() => handleRequeue(p)}>
                       Move to Queue
                     </Button>
                   )}
@@ -176,7 +270,63 @@ export function VettingQueue() {
           ))}
         </div>
       )}
+
+      {/* ── Approve / Reject Modal ─────────────────────────────────────────── */}
+      <Modal
+        open={!!actionModal}
+        onClose={() => { setActionModal(null); setRejectReason(''); }}
+        title={actionModal?.type === 'approve' ? 'Approve Property' : 'Reject Property'}
+        size="sm"
+        footer={
+          <div className="flex gap-2 w-full">
+            <Button variant="secondary" className="flex-1" onClick={() => { setActionModal(null); setRejectReason(''); }}>
+              Cancel
+            </Button>
+            {actionModal?.type === 'approve' ? (
+              <Button
+                className="flex-1"
+                loading={actionLoading}
+                icon={<CheckCircle2 size={14} />}
+                onClick={() => actionModal && handleApprove(actionModal.property)}
+              >
+                Publish Property
+              </Button>
+            ) : (
+              <Button
+                variant="danger"
+                className="flex-1"
+                loading={actionLoading}
+                icon={<XCircle size={14} />}
+                onClick={() => actionModal && handleReject(actionModal.property)}
+              >
+                Reject
+              </Button>
+            )}
+          </div>
+        }
+      >
+        {actionModal && (
+          <div className="space-y-4">
+            <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+              <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{actionModal.property.title}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{actionModal.property.address}, {actionModal.property.district}</p>
+            </div>
+            {actionModal.type === 'approve' ? (
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                This will publish the property and make it visible to tenants. Are you sure?
+              </p>
+            ) : (
+              <Textarea
+                label="Reason for rejection *"
+                placeholder="e.g. Photos are unclear, address is incomplete, pricing seems incorrect..."
+                value={rejectReason}
+                onChange={e => setRejectReason(e.target.value)}
+                rows={3}
+              />
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
-
