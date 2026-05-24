@@ -2796,9 +2796,53 @@ app.post('/api/agent-applications', async (req, res) => {
        experience, JSON.stringify(districts || []), motivation]
     );
 
+    // ── Also save each document into the documents table so admin can see
+    //    them on the Documents page and approve/reject them individually.
+    const applicantName = `${firstName} ${lastName}`.trim();
+    const ownerRole = role || 'agent';
+    const ownerId = userId || null;
+
+    if (nationalIdDoc && ownerId) {
+      await pool.query(
+        `INSERT INTO documents (id, owner_id, owner_name, owner_role, name, category, status,
+         file_url, file_type, file_size, uploaded_at)
+         VALUES ($1,$2,$3,$4,$5,'kyc','pending',$6,$7,0,NOW())
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          uuidv4(),
+          ownerId,
+          applicantName,
+          ownerRole,
+          `National ID — ${applicantName}`,
+          nationalIdDoc,
+          nationalIdDoc.startsWith('data:application/pdf') ? 'application/pdf' : 'image/jpeg',
+        ]
+      ).catch(e => console.error('doc insert (national_id):', e.message));
+    }
+
+    if (Array.isArray(additionalDocs) && ownerId) {
+      for (const doc of additionalDocs) {
+        if (!doc || !doc.dataUrl) continue;
+        await pool.query(
+          `INSERT INTO documents (id, owner_id, owner_name, owner_role, name, category, status,
+           file_url, file_type, file_size, uploaded_at)
+           VALUES ($1,$2,$3,$4,$5,'kyc','pending',$6,$7,0,NOW())
+           ON CONFLICT (id) DO NOTHING`,
+          [
+            uuidv4(),
+            ownerId,
+            applicantName,
+            ownerRole,
+            doc.name || 'Supporting Document',
+            doc.dataUrl,
+            doc.type || 'application/octet-stream',
+          ]
+        ).catch(e => console.error('doc insert (additional):', e.message));
+      }
+    }
+
     // Notify all admins about the new application requiring review
     const roleLabel = role === 'landlord' ? 'Landlord' : role === 'property_manager' ? 'Property Manager' : 'Agent';
-    const applicantName = `${firstName} ${lastName}`.trim();
     const admins = await pool.query(`SELECT id FROM users WHERE role = 'admin' AND is_suspended = false`);
     for (const a of admins.rows) {
       await pool.query(
@@ -2808,7 +2852,7 @@ app.post('/api/agent-applications', async (req, res) => {
           uuidv4(),
           a.id,
           `New ${roleLabel} Application`,
-          `${applicantName} has submitted a ${roleLabel} application with documents for review.`,
+          `${applicantName} has submitted a ${roleLabel} application with documents for review. Check Applications and Documents pages.`,
         ]
       ).catch(() => {});
     }
