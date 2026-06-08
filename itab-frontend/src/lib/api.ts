@@ -121,6 +121,7 @@ export const usersApi = {
   rejectApproval:    (id: string, reason: string) => api.patch(`/users/${id}/reject-approval`, { reason }),
   pending:           () => api.get<ApiResponse<unknown[]>>('/users/pending'),
   setPermissions:    (id: string, permissions: unknown) => api.patch(`/users/${id}/permissions`, { permissions }),
+  resetPermissions:  (id: string) => api.delete<ApiResponse<unknown>>(`/users/${id}/permissions`),
   setDistricts:      (id: string, districts: string[]) => api.patch(`/users/${id}/districts`, { districts }),
   changeRole:        (id: string, role: string) => api.patch(`/users/${id}/role`, { role }),
 };

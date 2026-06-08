@@ -40,7 +40,7 @@ app.use(cors({
   },
   credentials: true,
 }));
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '50mb' }));
 app.use(morgan('dev'));
 
 // Block mutating API calls until admin approves the account (except messages, document upload, self-delete).
@@ -60,7 +60,9 @@ app.use(async (req, res, next) => {
   const allow =
     req.path.startsWith('/api/messages')
     || (req.method === 'POST' && req.path === '/api/documents')
-    || (req.method === 'DELETE' && req.path === '/api/auth/account');
+    || (req.method === 'DELETE' && req.path === '/api/auth/account')
+    || (req.method === 'POST' && req.path === '/api/agent-applications')
+    || (req.method === 'GET'  && req.path === '/api/agent-applications/my');
   if (allow) return next();
   try {
     const r = await pool.query(
@@ -127,6 +129,8 @@ function requireRole(...roles) {
 
 function requirePerm(section, key) {
   return (req, res, next) => {
+    // Admins always have full access regardless of what may be stored in their permissions column.
+    if (req.user?.role === 'admin') return next();
     if (!req.effectivePermissions) {
       return res.status(500).json({ message: 'Permissions not available' });
     }
@@ -144,6 +148,8 @@ function requirePerm(section, key) {
 
 function requireAnyPerm(pairs) {
   return (req, res, next) => {
+    // Admins always have full access regardless of what may be stored in their permissions column.
+    if (req.user?.role === 'admin') return next();
     if (!req.effectivePermissions) {
       return res.status(500).json({ message: 'Permissions not available' });
     }
@@ -1297,6 +1303,20 @@ app.patch('/api/users/:id/permissions', auth, requireRole('admin'), requirePerm(
     const result = await pool.query(
       `UPDATE users SET permissions=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
       [JSON.stringify(permissions), req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
+    res.json({ data: formatUser(result.rows[0]) });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Reset a user's permissions to role defaults (NULL = use defaults, no overrides)
+app.delete('/api/users/:id/permissions', auth, requireRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE users SET permissions=NULL, updated_at=NOW() WHERE id=$1 RETURNING *`,
+      [req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
@@ -3085,8 +3105,28 @@ app.post('/api/payment-preferences', auth, requirePerm('settings', 'setPaymentMe
 // START SERVER
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.listen(PORT, () => {
+/**
+ * On startup, clear any stored `permissions` override on admin accounts.
+ * Admin role always gets the full all-true defaults — stale overrides in the DB
+ * (written by older code before new permission keys were added) would otherwise
+ * block admin access to new features like agent-applications, documents, etc.
+ */
+async function clearAdminStoredPermissions() {
+  try {
+    const result = await pool.query(
+      `UPDATE users SET permissions = NULL WHERE role = 'admin' AND permissions IS NOT NULL`
+    );
+    if (result.rowCount > 0) {
+      console.log(`✅ Cleared stale permissions overrides for ${result.rowCount} admin account(s).`);
+    }
+  } catch (err) {
+    console.error('⚠️  Could not clear admin permissions (non-fatal):', err.message);
+  }
+}
+
+app.listen(PORT, async () => {
   console.log(`ITAB backend running on port ${PORT}`);
+  await clearAdminStoredPermissions();
 });
 
 module.exports = app;

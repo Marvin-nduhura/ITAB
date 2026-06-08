@@ -253,6 +253,8 @@ function isAwaitingApproval(row) {
 }
 
 function getEffectivePermissions(row) {
+  // Admin always gets the full all-true permission set — never penalised by a stale/partial DB override.
+  if (row && row.role === 'admin') return adminPerms();
   if (isAwaitingApproval(row)) return getPendingVerificationPermissions();
   return resolvePermissions(row.role, row.permissions);
 }

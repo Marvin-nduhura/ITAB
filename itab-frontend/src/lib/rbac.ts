@@ -50,6 +50,8 @@ export function isAwaitingApproval(user: User | null): boolean {
 /** Merge role defaults with any individual overrides the admin has set. */
 export function getPermissions(user: User | null): FullUserPermissions {
   if (!user) return resolvePermissions('guest');
+  // Admins always get the full all-true permission set — never penalised by a stale/partial DB override.
+  if (user.role === 'admin') return resolvePermissions('admin');
   if (isAwaitingApproval(user)) return getPendingVerificationPermissions();
   return resolvePermissions(user.role, parseStoredPermissions(user.permissions));
 }
