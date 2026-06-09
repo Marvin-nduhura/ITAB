@@ -296,6 +296,48 @@ async function main() {
   await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS national_id_doc TEXT`, 'agent_applications.national_id_doc');
   await run(`ALTER TABLE agent_applications ADD COLUMN IF NOT EXISTS additional_docs JSONB DEFAULT '[]'::jsonb`, 'agent_applications.additional_docs');
 
+  // Backfill: create an application record for every pending vetting-role user
+  // who registered but whose application INSERT failed (e.g. due to missing columns).
+  console.log('🔄 Backfilling missing application records for pending users...');
+  try {
+    const { v4: uuidv4 } = require('uuid');
+    const missingApps = await pool.query(`
+      SELECT u.id::text AS id, u.first_name, u.last_name, u.email, u.phone, u.role
+      FROM users u
+      WHERE u.role IN ('landlord', 'agent', 'property_manager')
+        AND u.approval_status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM agent_applications a WHERE a.user_id = u.id::text
+        )
+    `);
+    if (missingApps.rows.length > 0) {
+      console.log(`  Found ${missingApps.rows.length} user(s) without an application — creating records...`);
+      for (const u of missingApps.rows) {
+        const appId = uuidv4();
+        await pool.query(
+          `INSERT INTO agent_applications
+           (id, user_id, first_name, last_name, email, phone, role,
+            national_id_number, national_id_doc, additional_docs,
+            experience, districts, motivation, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13,'pending')`,
+          [
+            appId, u.id, u.first_name, u.last_name, u.email,
+            u.phone || null, u.role, null, null,
+            JSON.stringify([]),
+            'Registered via platform — documents pending review.',
+            JSON.stringify([]),
+            'Applied for account approval during registration.',
+          ]
+        );
+        console.log(`  ✅ Created application for ${u.first_name} ${u.last_name} (${u.role})`);
+      }
+    } else {
+      console.log('  ✅ All pending users already have application records.');
+    }
+  } catch (e) {
+    console.error('  ⚠️  Backfill failed (non-fatal):', e.message);
+  }
+
   // ── 8. Indexes ─────────────────────────────────────────────────────────────
   console.log('📇 Creating indexes...');
   const indexes = [

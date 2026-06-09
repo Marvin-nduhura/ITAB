@@ -3124,9 +3124,54 @@ async function clearAdminStoredPermissions() {
   }
 }
 
+/**
+ * On startup, ensure every pending vetting-role user has an application record.
+ * This is a safety net for cases where the POST /api/agent-applications failed
+ * during registration (e.g. due to a missing DB column), leaving users pending
+ * with no visible application in the admin panel.
+ */
+async function backfillMissingApplications() {
+  try {
+    const missing = await pool.query(`
+      SELECT u.id::text AS id, u.first_name, u.last_name, u.email, u.phone, u.role
+      FROM users u
+      WHERE u.role IN ('landlord', 'agent', 'property_manager')
+        AND u.approval_status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM agent_applications a WHERE a.user_id = u.id::text
+        )
+    `);
+    if (missing.rows.length > 0) {
+      console.log(`🔄 Backfilling ${missing.rows.length} missing application record(s)...`);
+      for (const u of missing.rows) {
+        const appId = uuidv4();
+        await pool.query(
+          `INSERT INTO agent_applications
+           (id, user_id, first_name, last_name, email, phone, role,
+            national_id_number, national_id_doc, additional_docs,
+            experience, districts, motivation, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb,$13,'pending')`,
+          [
+            appId, u.id, u.first_name, u.last_name, u.email,
+            u.phone || null, u.role, null, null,
+            JSON.stringify([]),
+            'Registered via platform — documents pending review.',
+            JSON.stringify([]),
+            'Applied for account approval during registration.',
+          ]
+        );
+        console.log(`  ✅ Created application for ${u.first_name} ${u.last_name} (${u.role})`);
+      }
+    }
+  } catch (err) {
+    console.error('⚠️  Backfill applications (non-fatal):', err.message);
+  }
+}
+
 app.listen(PORT, async () => {
   console.log(`ITAB backend running on port ${PORT}`);
   await clearAdminStoredPermissions();
+  await backfillMissingApplications();
 });
 
 module.exports = app;
