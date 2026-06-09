@@ -434,13 +434,13 @@ export function RegisterPage() {
                   {...registerApp('nationalId')}
                 />
                 <FileUpload
-                  label="National ID Photo *"
-                  accept="image/*"
+                  label="National ID Document *"
+                  accept="image/*,application/pdf,.pdf"
                   multiple={false}
                   maxFiles={1}
                   value={nationalIdFiles}
                   onChange={setNationalIdFiles}
-                  hint="Upload a clear photo of your National ID (front side)"
+                  hint="Upload a clear photo or scan of your National ID — JPG, PNG, or PDF accepted"
                   showCamera
                 />
 

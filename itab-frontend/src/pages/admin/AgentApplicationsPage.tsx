@@ -63,24 +63,41 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function isImageUrl(url: string, name: string): boolean {
-  return /^data:image/i.test(url) || /\.(jpg|jpeg|png|gif|webp)$/i.test(name);
+  return /^data:image\//i.test(url) || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(name);
 }
 
 function isPdfUrl(url: string, name: string): boolean {
   return /^data:application\/pdf/i.test(url) || /\.pdf$/i.test(name);
 }
 
+function isWordDoc(url: string, name: string): boolean {
+  return /^data:application\/(msword|vnd\.openxmlformats|vnd\.ms-word)/i.test(url)
+    || /\.(doc|docx)$/i.test(name);
+}
+
+/** Friendly label derived from MIME type or filename. */
+function docTypeLabel(url: string, name: string): string {
+  if (isImageUrl(url, name)) return 'Image';
+  if (isPdfUrl(url, name))   return 'PDF';
+  if (isWordDoc(url, name))  return 'Word Document';
+  return 'Document';
+}
+
 // ─── Full-screen document viewer ─────────────────────────────────────────────
 function DocViewer({ dataUrl, name, onClose }: { dataUrl: string; name: string; onClose: () => void }) {
-  const isImg = isImageUrl(dataUrl, name);
-  const isPdf = isPdfUrl(dataUrl, name);
+  const isImg   = isImageUrl(dataUrl, name);
+  const isPdf   = isPdfUrl(dataUrl, name);
+  const typeLabel = docTypeLabel(dataUrl, name);
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/85 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-4xl bg-white dark:bg-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex-shrink-0">
-          <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate max-w-xs">{name}</p>
+          <div className="flex items-center gap-2 min-w-0">
+            <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate max-w-xs">{name}</p>
+            <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-500 px-2 py-0.5 rounded-full flex-shrink-0">{typeLabel}</span>
+          </div>
           <div className="flex items-center gap-2">
             <a href={dataUrl} download={name}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-medium transition-colors">
@@ -102,7 +119,8 @@ function DocViewer({ dataUrl, name, onClose }: { dataUrl: string; name: string; 
           ) : (
             <div className="text-center py-16">
               <FileText size={56} className="mx-auto text-slate-300 mb-4" />
-              <p className="text-slate-500 text-sm mb-4">Preview not available for this file type.</p>
+              <p className="text-slate-500 text-sm mb-1">Preview not available for <strong>{typeLabel}</strong> files.</p>
+              <p className="text-slate-400 text-xs mb-4">Download the file to open it with the appropriate application.</p>
               <a href={dataUrl} download={name}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors">
                 <Download size={14} /> Download to view
@@ -127,6 +145,8 @@ function DocRow({ dataUrl, name, label, onView, onReplace }: DocRowProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const camRef  = useRef<HTMLInputElement>(null);
   const isImg   = dataUrl ? isImageUrl(dataUrl, name) : false;
+  const isPdf   = dataUrl ? isPdfUrl(dataUrl, name) : false;
+  const typeLabel = dataUrl ? docTypeLabel(dataUrl, name) : '';
 
   const handleFile = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -175,11 +195,13 @@ function DocRow({ dataUrl, name, label, onView, onReplace }: DocRowProps) {
         <div className="w-12 h-12 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 dark:bg-slate-700 flex items-center justify-center border border-slate-200 dark:border-slate-600">
           {isImg
             ? <img src={dataUrl} alt={name} className="w-full h-full object-cover" />
-            : <FileText size={20} className="text-slate-400" />}
+            : isPdf
+              ? <span className="text-xs font-bold text-red-600">PDF</span>
+              : <FileText size={20} className="text-slate-400" />}
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">{label}</p>
-          <p className="text-xs text-slate-400 truncate">{name}</p>
+          <p className="text-xs text-slate-400 truncate">{name || typeLabel}</p>
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mr-1">
           <Eye size={13} className="text-primary-600" />

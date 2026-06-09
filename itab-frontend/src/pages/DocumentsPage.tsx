@@ -530,6 +530,18 @@ export function DocumentsPage() {
             {viewDoc.fileUrl && viewDoc.fileType.startsWith('image/') && (
               <img src={viewDoc.fileUrl} alt={viewDoc.name} className="w-full rounded-xl border border-slate-200 dark:border-slate-600" />
             )}
+            {viewDoc.fileUrl && viewDoc.fileType === 'application/pdf' && (
+              <iframe src={viewDoc.fileUrl} title={viewDoc.name} className="w-full h-96 rounded-xl border border-slate-200 dark:border-slate-600" />
+            )}
+            {viewDoc.fileUrl && !viewDoc.fileType.startsWith('image/') && viewDoc.fileType !== 'application/pdf' && (
+              <div className="flex items-center gap-3 p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl border border-slate-200 dark:border-slate-600">
+                <FileText size={28} className="text-blue-500 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">{viewDoc.name}</p>
+                  <p className="text-xs text-slate-400">{viewDoc.fileType} — download to open</p>
+                </div>
+              </div>
+            )}
             {viewDoc.fileUrl && (
               <Button variant="secondary" className="w-full" icon={<Download size={15} />}
                 onClick={() => { const a = document.createElement('a'); a.href = viewDoc.fileUrl; a.download = viewDoc.name; a.click(); }}>

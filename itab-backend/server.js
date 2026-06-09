@@ -2822,11 +2822,33 @@ app.post('/api/agent-applications', async (req, res) => {
     const ownerRole = role || 'agent';
     const ownerId = userId || null;
 
+    /**
+     * Detect MIME type from a base64 data URL.
+     * Falls back to 'application/octet-stream' for unknown types.
+     */
+    function detectMimeFromDataUrl(dataUrl) {
+      if (!dataUrl || typeof dataUrl !== 'string') return 'application/octet-stream';
+      const match = dataUrl.match(/^data:([^;]+);base64,/);
+      return match ? match[1] : 'application/octet-stream';
+    }
+
+    /**
+     * Estimate file size in bytes from a base64 data URL.
+     * base64 encodes 3 bytes as 4 chars; strip the header first.
+     */
+    function estimateSizeFromDataUrl(dataUrl) {
+      if (!dataUrl || typeof dataUrl !== 'string') return 0;
+      const base64Part = dataUrl.split(',')[1] || '';
+      return Math.round((base64Part.length * 3) / 4);
+    }
+
     if (nationalIdDoc && ownerId) {
+      const mimeType = detectMimeFromDataUrl(nationalIdDoc);
+      const fileSize = estimateSizeFromDataUrl(nationalIdDoc);
       await pool.query(
         `INSERT INTO documents (id, owner_id, owner_name, owner_role, name, category, status,
          file_url, file_type, file_size, uploaded_at)
-         VALUES ($1,$2,$3,$4,$5,'kyc','pending',$6,$7,0,NOW())
+         VALUES ($1,$2,$3,$4,$5,'kyc','pending',$6,$7,$8,NOW())
          ON CONFLICT (id) DO NOTHING`,
         [
           uuidv4(),
@@ -2835,7 +2857,8 @@ app.post('/api/agent-applications', async (req, res) => {
           ownerRole,
           `National ID — ${applicantName}`,
           nationalIdDoc,
-          nationalIdDoc.startsWith('data:application/pdf') ? 'application/pdf' : 'image/jpeg',
+          mimeType,
+          fileSize,
         ]
       ).catch(e => console.error('doc insert (national_id):', e.message));
     }
@@ -2843,10 +2866,12 @@ app.post('/api/agent-applications', async (req, res) => {
     if (Array.isArray(additionalDocs) && ownerId) {
       for (const doc of additionalDocs) {
         if (!doc || !doc.dataUrl) continue;
+        const mimeType = doc.type || detectMimeFromDataUrl(doc.dataUrl);
+        const fileSize = estimateSizeFromDataUrl(doc.dataUrl);
         await pool.query(
           `INSERT INTO documents (id, owner_id, owner_name, owner_role, name, category, status,
            file_url, file_type, file_size, uploaded_at)
-           VALUES ($1,$2,$3,$4,$5,'kyc','pending',$6,$7,0,NOW())
+           VALUES ($1,$2,$3,$4,$5,'kyc','pending',$6,$7,$8,NOW())
            ON CONFLICT (id) DO NOTHING`,
           [
             uuidv4(),
@@ -2855,7 +2880,8 @@ app.post('/api/agent-applications', async (req, res) => {
             ownerRole,
             doc.name || 'Supporting Document',
             doc.dataUrl,
-            doc.type || 'application/octet-stream',
+            mimeType,
+            fileSize,
           ]
         ).catch(e => console.error('doc insert (additional):', e.message));
       }
