@@ -69,7 +69,7 @@ function landlordPerms(): FullUserPermissions {
   p.messages = { viewMessages: true, sendMessage: true, deleteMessage: false, searchConversations: true };
   p.notices = { viewNotices: true, sendNotice: true, acknowledgeNotice: false, disputeNotice: false, deleteNotice: false };
   p.documents = { viewOwnDocuments: true, viewAllDocuments: false, uploadDocument: true, downloadDocument: true, deleteDocument: false, approveKYCDocument: false, rejectKYCDocument: false, requestDocumentChanges: false };
-  p.vendors = { viewVendors: false, addVendor: false, editVendor: false, suspendVendor: false, verifyVendor: false, viewVendorRatings: false, viewVendorJobHistory: false };
+  p.vendors = { viewVendors: true, addVendor: false, editVendor: false, suspendVendor: false, verifyVendor: false, viewVendorRatings: true, viewVendorJobHistory: false };
   p.contracts = { viewContracts: false, createContract: false, editContract: false, pauseContract: false, cancelContract: false, processContractPayment: false };
   p.transactions = { viewOwnTransactions: true, viewAllTransactions: false, retryFailedTransaction: false, refundTransaction: false, exportTransactionsCSV: false };
   p.analytics = { viewBasicAnalytics: true, viewPlatformRevenue: false, viewTransactionVolume: false, viewUserStats: false, viewDisputeStats: false, viewTopProperties: false };
@@ -113,9 +113,10 @@ function agentPerms(): FullUserPermissions {
 function vendorPerms(): FullUserPermissions {
   const p = none();
   p.properties = { ...none().properties, viewProperties: true, viewPropertyDetails: true, viewPropertyMap: true };
-  p.maintenance = { viewOwnMaintenance: true, viewAllMaintenance: false, submitMaintenanceRequest: false, uploadMaintenancePhotos: true, assignVendorToJob: false, markMaintenanceInProgress: false, markMaintenanceCompleted: false, cancelMaintenanceRequest: false, revertMaintenanceStatus: false, reopenMaintenanceRequest: false, rateVendorAfterJob: false, viewVendorContactInfo: false };
+  p.maintenance = { viewOwnMaintenance: true, viewAllMaintenance: false, submitMaintenanceRequest: false, uploadMaintenancePhotos: true, assignVendorToJob: false, markMaintenanceInProgress: true, markMaintenanceCompleted: true, cancelMaintenanceRequest: false, revertMaintenanceStatus: false, reopenMaintenanceRequest: false, rateVendorAfterJob: false, viewVendorContactInfo: true };
   p.messages = { viewMessages: true, sendMessage: true, deleteMessage: false, searchConversations: true };
   p.documents = { viewOwnDocuments: true, viewAllDocuments: false, uploadDocument: true, downloadDocument: true, deleteDocument: false, approveKYCDocument: false, rejectKYCDocument: false, requestDocumentChanges: false };
+  p.vendors = { viewVendors: true, addVendor: false, editVendor: false, suspendVendor: false, verifyVendor: false, viewVendorRatings: true, viewVendorJobHistory: true };
   p.transactions = { viewOwnTransactions: true, viewAllTransactions: false, retryFailedTransaction: false, refundTransaction: false, exportTransactionsCSV: false };
   p.contracts = { viewContracts: true, createContract: false, editContract: false, pauseContract: false, cancelContract: false, processContractPayment: false };
   p.settings = { editProfile: true, changePassword: true, setPaymentMethod: true, manageNotificationPreferences: true, changeTheme: true };
