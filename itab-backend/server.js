@@ -2263,8 +2263,27 @@ app.post('/api/vendors', auth, requireRole('admin', 'property_manager'), require
   }
 });
 
-app.put('/api/vendors/:id', auth, requireRole('admin', 'property_manager'), requirePerm('vendors', 'editVendor'), async (req, res) => {
+app.put('/api/vendors/:id', auth, async (req, res) => {
+  // Allow admin/property_manager with editVendor perm, OR the vendor updating their OWN record
+  const isAdminOrManager = ['admin', 'property_manager'].includes(req.user.role);
+  const isOwnVendorRecord = req.user.role === 'vendor'; // will verify ownership below
+
+  if (!isAdminOrManager && !isOwnVendorRecord) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  if (isAdminOrManager && !hasPermission(req.effectivePermissions, 'vendors', 'editVendor') && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'You do not have permission to edit vendor profiles.' });
+  }
+
   try {
+    // If vendor role, verify they own this vendor record
+    if (isOwnVendorRecord) {
+      const ownership = await pool.query('SELECT id FROM vendors WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+      if (!ownership.rows.length) {
+        return res.status(403).json({ message: 'You can only update your own vendor profile.' });
+      }
+    }
+
     const { firstName, lastName, phone, category, skills, bio, district, address, dailyRate, hourlyRate, availability, isActive } = req.body;
     const result = await pool.query(
       `UPDATE vendors SET first_name=COALESCE($1,first_name), last_name=COALESCE($2,last_name),
@@ -2276,8 +2295,10 @@ app.put('/api/vendors/:id', auth, requireRole('admin', 'property_manager'), requ
       [firstName, lastName, phone, category, skills ? JSON.stringify(skills) : null,
        bio, district, address, dailyRate, hourlyRate, availability, isActive, req.params.id]
     );
+    if (!result.rows.length) return res.status(404).json({ message: 'Vendor not found' });
     res.json({ data: formatVendor(result.rows[0]) });
   } catch (err) {
+    console.error('vendors PUT:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -2311,11 +2332,23 @@ app.get('/api/vendor-jobs', auth, requireAnyPerm([['maintenance', 'viewOwnMainte
     let query = 'SELECT * FROM vendor_jobs WHERE 1=1';
     const params = [];
     let i = 1;
-    if (req.user.role === 'vendor') { query += ` AND vendor_id = $${i}`; params.push(req.user.id); i++; }
+    if (req.user.role === 'vendor') {
+      // Look up this user's vendor record ID, then filter jobs by that vendor_id
+      const vendorRow = await pool.query('SELECT id FROM vendors WHERE user_id = $1 LIMIT 1', [req.user.id]);
+      if (vendorRow.rows.length > 0) {
+        query += ` AND vendor_id = $${i}`;
+        params.push(vendorRow.rows[0].id);
+        i++;
+      } else {
+        // Vendor user has no vendor record yet — return empty list
+        return res.json({ data: [] });
+      }
+    }
     query += ' ORDER BY created_at DESC';
     const result = await pool.query(query, params);
     res.json({ data: result.rows.map(formatVendorJob) });
   } catch (err) {
+    console.error('vendor-jobs GET:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

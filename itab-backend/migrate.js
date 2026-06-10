@@ -58,9 +58,10 @@ async function main() {
   await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS created_by_name TEXT`, 'properties.created_by_name');
   await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS created_by_role TEXT`, 'properties.created_by_role');
   await run(
-    `UPDATE properties SET created_by_id = COALESCE(created_by_id, manager_id, landlord_id),
-     created_by_name = COALESCE(created_by_name, manager_name, landlord_name)
-     WHERE created_by_id IS NULL AND (manager_id IS NOT NULL OR landlord_id IS NOT NULL)`,
+    `UPDATE properties SET
+       created_by_id   = COALESCE(created_by_id, manager_id::text, landlord_id::text),
+       created_by_name = COALESCE(created_by_name, manager_name, landlord_name)
+     WHERE created_by_id IS NULL`,
     'properties.created_by backfill'
   );
 
