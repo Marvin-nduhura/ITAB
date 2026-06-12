@@ -1,19 +1,44 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowLeft, MapPin, Bed, Bath, Square, LogIn, UserPlus, Calendar, Phone, CheckCircle2, Star } from 'lucide-react';
 import { usePropertyStore } from '../store/propertyStore';
+import { propertiesApi } from '../lib/api';
 import { formatCurrency, amenityIcons } from '../lib/utils';
 import { Badge } from '../components/ui/Badge';
 import toast from 'react-hot-toast';
+import type { Property } from '../types';
 
 export function PublicPropertyPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { properties } = usePropertyStore();
+  const { properties, setProperties } = usePropertyStore();
   const [photoIdx, setPhotoIdx] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  // If store is empty (direct navigation, no auth), fetch public properties once
+  useEffect(() => {
+    if (properties.length === 0 && id) {
+      setLoading(true);
+      propertiesApi.list()
+        .then(res => {
+          const data = (res.data as { data: Property[] }).data;
+          if (Array.isArray(data) && data.length > 0) setProperties(data);
+        })
+        .catch(() => {})
+        .finally(() => setLoading(false));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const property = properties.find(p => p.id === id && p.status === 'published');
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center">
+        <span className="w-10 h-10 border-4 border-primary-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!property) {
     return (

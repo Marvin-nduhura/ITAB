@@ -25,6 +25,7 @@ import { useDocumentStore } from '../store/documentStore';
 import { useDisputeStore } from '../store/disputeStore';
 import {
   syncApi,
+  propertiesApi,
   usersApi,
   auditLogsApi,
   agentApplicationsApi,
@@ -80,10 +81,25 @@ export function useBackendSync() {
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isSyncing = useRef(false);
+  const publicFetched = useRef(false);
 
   function asArray<T>(val: unknown): T[] {
     return Array.isArray(val) ? (val as T[]) : [];
   }
+
+  // Fetch public (published) properties for guests — runs once regardless of auth.
+  // This ensures the Search/Landing page shows listings even before login.
+  const fetchPublicProperties = useCallback(async () => {
+    if (publicFetched.current) return;
+    publicFetched.current = true;
+    try {
+      const res = await propertiesApi.list();
+      const props = asArray<Property>((res.data as { data: Property[] }).data);
+      if (props.length > 0) setProperties(props);
+    } catch {
+      // Silent fail — backend unreachable, keep empty store
+    }
+  }, [setProperties]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fullSync = useCallback(async () => {
     if (!isAuthenticated || !isOnline || isSyncing.current) return;
@@ -193,6 +209,14 @@ export function useBackendSync() {
       fullSync();
     }
   }, [isAuthenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Always fetch public properties on mount — allows guests and unauthenticated
+  // users to browse the published listings on the Search/Landing page.
+  useEffect(() => {
+    if (isOnline) {
+      fetchPublicProperties();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When coming back online: sync immediately
   useEffect(() => {

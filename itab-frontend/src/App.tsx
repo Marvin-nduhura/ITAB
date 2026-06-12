@@ -122,6 +122,8 @@ export default function App() {
             {/* ── Public routes (no auth needed) ── */}
             <Route path="/"              element={<LandingOrDashboard />} />
             <Route path="/browse/:id"    element={<PublicPropertyPage />} />
+            {/* /search is public — guests see standalone, auth users get it in AppLayout too */}
+            <Route path="/search"        element={<SearchPage />} />
 
             {/* Public auth routes */}
             <Route path="/login"           element={<PublicRoute><LoginPage /></PublicRoute>} />

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Search, MapPin, Bed, Bath, Heart, LogIn, UserPlus, Building2, X, SlidersHorizontal, ArrowRight } from 'lucide-react';
+import { Search, MapPin, Bed, Bath, LogIn, UserPlus, Building2, X, SlidersHorizontal, ArrowRight } from 'lucide-react';
 import { usePropertyStore } from '../store/propertyStore';
 import { formatCurrency, DISTRICTS } from '../lib/utils';
 import { Badge } from '../components/ui/Badge';
@@ -16,7 +16,6 @@ export function LandingPage() {
   const [typeFilter, setTypeFilter] = useState('');
   const [districtFilter, setDistrictFilter] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const [favorites] = useState<Set<string>>(new Set());
 
   const filtered = published.filter(p => {
     const q = query.toLowerCase();
@@ -25,11 +24,6 @@ export function LandingPage() {
     const matchDist = !districtFilter || p.district === districtFilter;
     return matchQ && matchType && matchDist;
   });
-
-  const handleFav = (_id: string) => {
-    toast('Sign in to save favorites', { icon: '🔒' });
-    navigate('/login');
-  };
 
   const handleAction = (msg: string) => {
     toast(msg, { icon: '🔒', duration: 3000 });
@@ -188,12 +182,21 @@ export function LandingPage() {
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
-                  {/* Favorite */}
+                  {/* Share button instead of favorites for guests */}
                   <button
-                    onClick={e => { e.stopPropagation(); handleFav(p.id); }}
+                    onClick={e => {
+                      e.stopPropagation();
+                      const url = `${window.location.origin}/browse/${p.id}`;
+                      if (navigator.share) {
+                        navigator.share({ title: p.title, url }).catch(() => {});
+                      } else {
+                        navigator.clipboard.writeText(url).then(() => toast.success('Link copied!'));
+                      }
+                    }}
                     className="absolute top-3 right-3 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center hover:scale-110 transition-transform shadow"
+                    title="Share this property"
                   >
-                    <Heart size={14} className={favorites.has(p.id) ? 'fill-red-500 text-red-500' : 'text-slate-500'} />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
                   </button>
                   {p.isFeatured && (
                     <div className="absolute top-3 left-3 bg-amber-400 text-white text-xs font-bold px-2 py-0.5 rounded-full">

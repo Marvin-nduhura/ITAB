@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, MapPin, SlidersHorizontal, X, Bed, Bath, Heart, Map, Grid3X3, Navigation, Crosshair, ArrowUpDown } from 'lucide-react';
@@ -7,6 +7,7 @@ import { Badge } from '../components/ui/Badge';
 import { Input } from '../components/ui/Input';
 import { useAuthStore } from '../store/authStore';
 import { usePropertyStore } from '../store/propertyStore';
+import { propertiesApi } from '../lib/api';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { formatCurrency, amenityIcons, DISTRICTS, INSPECTION_FEE } from '../lib/utils';
 import { filterPropertiesForUser } from '../lib/rbac';
@@ -20,9 +21,22 @@ export function SearchPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
-  const { properties: allProperties, customPropertyTypes, customDistricts } = usePropertyStore();
+  const { properties: allProperties, customPropertyTypes, customDistricts, setProperties } = usePropertyStore();
   // Guests and tenants see published only; other roles see their relevant properties
   const properties = filterPropertiesForUser(allProperties, user);
+  const isGuest = !user;
+
+  // Safety net: if store is empty when we land here (direct navigation), fetch public properties
+  useEffect(() => {
+    if (allProperties.length === 0) {
+      propertiesApi.list()
+        .then(res => {
+          const data = (res.data as { data: unknown[] }).data;
+          if (Array.isArray(data) && data.length > 0) setProperties(data as Parameters<typeof setProperties>[0]);
+        })
+        .catch(() => {});
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [query, setQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'map'>(searchParams.get('view') === 'map' ? 'map' : 'grid');
@@ -80,8 +94,18 @@ export function SearchPage() {
   });
 
   const toggleFav = (id: string) => {
-    if (!user) { toast('Sign in to save favorites', { icon: '🔒' }); return; }
+    if (!user) { toast('Sign in to save favorites', { icon: '🔒' }); navigate('/login'); return; }
     setFavorites(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+
+  const handleShare = (e: React.MouseEvent, p: { id: string; title: string }) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}/browse/${p.id}`;
+    if (navigator.share) {
+      navigator.share({ title: p.title, url }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(url).then(() => toast.success('Link copied!'));
+    }
   };
 
   const toggleAmenity = (a: string) => {
@@ -197,10 +221,15 @@ export function SearchPage() {
       {!user && (
         <div className="bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-800 rounded-2xl p-4 flex items-center justify-between gap-4">
           <div>
-            <p className="font-semibold text-primary-800 dark:text-primary-300 text-sm">Sign up to unlock more features</p>
-            <p className="text-xs text-primary-600 dark:text-primary-400 mt-0.5">Save favorites, book inspections, and pay rent online</p>
+            <p className="font-semibold text-primary-800 dark:text-primary-300 text-sm">👋 Browsing as guest</p>
+            <p className="text-xs text-primary-600 dark:text-primary-400 mt-0.5">
+              You can view listings and share them. Sign up to book inspections, save favorites, and pay rent online.
+            </p>
           </div>
-          <Button size="sm" onClick={() => navigate('/register')}>Sign up free</Button>
+          <div className="flex gap-2 flex-shrink-0">
+            <Button size="sm" variant="secondary" onClick={() => navigate('/login')}>Sign In</Button>
+            <Button size="sm" onClick={() => navigate('/register')}>Sign Up Free</Button>
+          </div>
         </div>
       )}
 
@@ -251,9 +280,9 @@ export function SearchPage() {
                       <p style={{ fontWeight: 700, fontSize: 13 }}>{p.title}</p>
                       <p style={{ fontSize: 11, color: '#64748b' }}>{p.address}</p>
                       <p style={{ fontWeight: 700, color: '#2563eb', marginTop: 4 }}>{formatCurrency(p.rentPrice)}/mo</p>
-                      <button onClick={() => navigate(`/properties/${p.id}`)}
+                      <button onClick={() => navigate(isGuest ? `/browse/${p.id}` : `/properties/${p.id}`)}
                         style={{ marginTop: 8, width: '100%', background: '#2563eb', color: 'white', fontSize: 12, padding: '6px 0', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 600 }}>
-                        View Details
+                        {isGuest ? 'View Listing' : 'View Details'}
                       </button>
                     </div>
                   </InfoWindow>
@@ -270,15 +299,26 @@ export function SearchPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
           {sorted.map((p, i) => (
             <motion.div key={p.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
-              onClick={() => navigate(`/properties/${p.id}`)}
+              onClick={() => navigate(isGuest ? `/browse/${p.id}` : `/properties/${p.id}`)}
               className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 overflow-hidden cursor-pointer hover:shadow-card-lg hover:-translate-y-1 transition-all duration-300 group">
               <div className="relative h-44 overflow-hidden">
                 <img src={p.photos[0]} alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent" />
-                <button onClick={e => { e.stopPropagation(); toggleFav(p.id); }}
-                  className="absolute top-3 right-3 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center hover:scale-110 transition-transform">
-                  <Heart size={14} className={favorites.has(p.id) ? 'fill-red-500 text-red-500' : 'text-slate-500'} />
-                </button>
+                {/* Guests see share button; authenticated users see favorites heart */}
+                {isGuest ? (
+                  <button
+                    onClick={e => handleShare(e, p)}
+                    className="absolute top-3 right-3 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center hover:scale-110 transition-transform"
+                    title="Share this property"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-500"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                  </button>
+                ) : (
+                  <button onClick={e => { e.stopPropagation(); toggleFav(p.id); }}
+                    className="absolute top-3 right-3 w-8 h-8 bg-white/90 rounded-full flex items-center justify-center hover:scale-110 transition-transform">
+                    <Heart size={14} className={favorites.has(p.id) ? 'fill-red-500 text-red-500' : 'text-slate-500'} />
+                  </button>
+                )}
                 <div className="absolute bottom-3 left-3">
                   <p className="text-white font-bold text-lg drop-shadow">{formatCurrency(p.rentPrice)}<span className="text-xs font-normal">/mo</span></p>
                 </div>
