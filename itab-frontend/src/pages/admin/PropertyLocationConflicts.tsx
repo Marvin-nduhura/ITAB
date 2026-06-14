@@ -1,31 +1,72 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { MapPin, AlertTriangle, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Card } from '../../components/ui/Card';
 import { Textarea } from '../../components/ui/Input';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
-import { propertyConflictsApi } from '../../lib/api';
-import type { PropertyLocationConflict } from '../../types';
+import { propertyConflictsApi, propertiesApi } from '../../lib/api';
+import type { PropertyLocationConflict, Property } from '../../types';
 import { formatDate } from '../../lib/utils';
 import toast from 'react-hot-toast';
 
 export function PropertyLocationConflicts() {
   const navigate = useNavigate();
-  const { properties } = usePropertyStore();
+  const { properties: storeProperties } = usePropertyStore();
   const [conflicts, setConflicts] = useState<PropertyLocationConflict[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'pending' | 'all'>('pending');
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
 
+  // Extra property cache for IDs not found in the store
+  const [fetchedProperties, setFetchedProperties] = useState<Record<string, Property>>({});
+  const [fetchingIds, setFetchingIds] = useState<Set<string>>(new Set());
+
+  // Merge store + fetched into one lookup
+  const getProperty = (id: string): Property | undefined =>
+    storeProperties.find(p => p.id === id) ?? fetchedProperties[id];
+
+  // For any property IDs missing from both store and fetched cache, fetch them
+  const fetchMissingProperties = async (ids: string[]) => {
+    const missing = ids.filter(id => !getProperty(id) && !fetchingIds.has(id));
+    if (missing.length === 0) return;
+
+    setFetchingIds(prev => new Set([...prev, ...missing]));
+
+    await Promise.allSettled(
+      missing.map(async id => {
+        try {
+          const res = await propertiesApi.get(id);
+          const p = (res.data as { data: Property }).data;
+          if (p) {
+            setFetchedProperties(prev => ({ ...prev, [id]: p }));
+          }
+        } catch {
+          // Leave as unknown — fallback UI handles it
+        }
+      })
+    );
+
+    setFetchingIds(prev => {
+      const next = new Set(prev);
+      missing.forEach(id => next.delete(id));
+      return next;
+    });
+  };
+
   const load = async () => {
     setLoading(true);
     try {
       const res = await propertyConflictsApi.list(filter === 'all' ? 'all' : 'pending');
-      setConflicts((res.data.data as PropertyLocationConflict[]) || []);
+      const data = (res.data.data as PropertyLocationConflict[]) || [];
+      setConflicts(data);
+
+      // Collect all property IDs from conflicts and fetch missing ones
+      const allIds = [...new Set(data.flatMap(c => c.propertyIds))];
+      await fetchMissingProperties(allIds);
     } catch {
       toast.error('Could not load location conflicts');
     } finally {
@@ -35,7 +76,7 @@ export function PropertyLocationConflicts() {
 
   useEffect(() => {
     load();
-  }, [filter]);
+  }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const resolve = async (id: string, status: 'confirmed_duplicate' | 'not_duplicate') => {
     setSavingId(id);
@@ -103,27 +144,47 @@ export function PropertyLocationConflicts() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                 {c.propertyIds.map(pid => {
-                  const p = properties.find(x => x.id === pid);
-                  if (!p) {
+                  const p = getProperty(pid);
+                  const isFetching = fetchingIds.has(pid);
+
+                  if (isFetching) {
                     return (
-                      <div key={pid} className="p-3 rounded-xl border border-slate-200 dark:border-slate-600 text-sm text-slate-500">
-                        {pid} (sync properties to see details)
+                      <div key={pid} className="p-3 rounded-xl border border-slate-200 dark:border-slate-600 flex items-center gap-2 text-sm text-slate-400">
+                        <Loader2 size={14} className="animate-spin flex-shrink-0" />
+                        Loading property…
                       </div>
                     );
                   }
+
+                  if (!p) {
+                    return (
+                      <div key={pid} className="p-3 rounded-xl border border-slate-200 dark:border-slate-600 text-sm text-slate-500">
+                        <p className="font-medium text-slate-600 dark:text-slate-400">Property not found</p>
+                        <p className="text-xs text-slate-400 mt-0.5 font-mono">ID: {pid}</p>
+                      </div>
+                    );
+                  }
+
                   return (
                     <button
                       key={pid}
                       type="button"
                       onClick={() => navigate(`/properties/${pid}`)}
-                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-600 text-left hover:border-primary-400 transition-colors"
+                      className="p-3 rounded-xl border border-slate-200 dark:border-slate-600 text-left hover:border-primary-400 transition-colors group"
                     >
-                      <p className="font-medium text-slate-900 dark:text-slate-100 text-sm">{p.title}</p>
+                      {p.photos?.[0] && (
+                        <img
+                          src={p.photos[0]}
+                          alt={p.title}
+                          className="w-full h-24 object-cover rounded-lg mb-2 group-hover:opacity-90 transition-opacity"
+                        />
+                      )}
+                      <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{p.title}</p>
                       <p className="text-xs text-slate-400 flex items-center gap-1 mt-1">
                         <MapPin size={11} /> {p.address}, {p.district}
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
-                        Added by {p.createdByName || 'Unknown'} · {p.status}
+                        Added by {p.createdByName || 'Unknown'} · <span className="capitalize">{p.status}</span>
                       </p>
                     </button>
                   );
