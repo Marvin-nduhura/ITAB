@@ -1335,14 +1335,18 @@ app.delete('/api/users/:id/permissions', auth, requireRole('admin'), async (req,
 app.patch('/api/users/:id/districts', auth, requireRole('admin'), requirePerm('userManagement', 'setDistrictRestrictions'), async (req, res) => {
   try {
     const { districts } = req.body;
+    if (!Array.isArray(districts)) {
+      return res.status(400).json({ message: 'districts must be an array' });
+    }
     const result = await pool.query(
-      `UPDATE users SET restricted_districts=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      `UPDATE users SET restricted_districts=$1::jsonb, updated_at=NOW() WHERE id=$2 RETURNING *`,
       [JSON.stringify(districts), req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('districts PATCH:', err.message);
+    res.status(500).json({ message: 'Server error', detail: err.message });
   }
 });
 
