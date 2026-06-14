@@ -262,7 +262,9 @@ function formatUser(u) {
     permissionsRaw && typeof permissionsRaw === 'object' && !Array.isArray(permissionsRaw)
       ? permissionsRaw
       : null;
-  const rd = parseDbJson(u.restricted_districts, []);
+  // restricted_districts is text[] — pg driver returns it as a native JS array
+  const rd = Array.isArray(u.restricted_districts) ? u.restricted_districts
+           : (u.restricted_districts ? parseDbJson(u.restricted_districts, []) : []);
   return {
     id: u.id,
     email: u.email,
@@ -1338,9 +1340,10 @@ app.patch('/api/users/:id/districts', auth, requireRole('admin'), requirePerm('u
     if (!Array.isArray(districts)) {
       return res.status(400).json({ message: 'districts must be an array' });
     }
+    // restricted_districts is text[] — pass as a native PG array, not JSONB
     const result = await pool.query(
-      `UPDATE users SET restricted_districts=$1::jsonb, updated_at=NOW() WHERE id=$2 RETURNING *`,
-      [JSON.stringify(districts), req.params.id]
+      `UPDATE users SET restricted_districts=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [districts, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ message: 'User not found' });
     res.json({ data: formatUser(result.rows[0]) });
