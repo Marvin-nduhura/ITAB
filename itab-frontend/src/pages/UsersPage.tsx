@@ -201,7 +201,7 @@ export function UsersPage() {
       updateUserPermissions(detailUser.id, savedPerms as FullUserPermissions);
       setDetailUser(prev => prev ? { ...prev, permissions: savedPerms as User['permissions'] } : null);
       setEditPermissions(resolvePermissions(detailUser.role, savedPerms));
-      toast.success('Permissions updated');
+      toast.success('Permissions updated — changes take effect on the user\'s next page load');
     } catch {
       updateUserPermissions(detailUser.id, editPermissions);
       setDetailUser(prev => prev ? { ...prev, permissions: editPermissions } : null);
@@ -228,10 +228,16 @@ export function UsersPage() {
     setDetailLoading(true);
     try {
       await usersApi.changeRole(detailUser.id, editRole);
+      // Reset stored permissions to NULL so the new role's defaults apply cleanly
+      await usersApi.resetPermissions(detailUser.id);
     } catch { /* backend unavailable */ }
     changeUserRole(detailUser.id, editRole);
-    setDetailUser(prev => prev ? { ...prev, role: editRole } : null);
-    toast.success('Role updated');
+    // Reset permissions to new role defaults in UI
+    const newDefaults = resolvePermissions(editRole);
+    updateUserPermissions(detailUser.id, newDefaults);
+    setDetailUser(prev => prev ? { ...prev, role: editRole, permissions: undefined } : null);
+    setEditPermissions(newDefaults);
+    toast.success(`Role changed to ${roleLabels[editRole]} — permissions reset to role defaults`);
     setDetailLoading(false);
   };
 
@@ -309,11 +315,19 @@ export function UsersPage() {
     setDeleteUserLoading(false);
   };
 
-  const handleResetPermissions = () => {
+  const handleResetPermissions = async () => {
     if (!detailUser) return;
     const defaults = resolvePermissions(detailUser.role);
     setEditPermissions(defaults);
-    toast('Permissions reset to role defaults', { icon: '🔄' });
+    try {
+      // NULL = use role defaults on the backend, no stored overrides
+      await usersApi.resetPermissions(detailUser.id);
+      updateUserPermissions(detailUser.id, defaults);
+      setDetailUser(prev => prev ? { ...prev, permissions: undefined } : null);
+      toast.success('Permissions reset to role defaults and saved');
+    } catch {
+      toast('Permissions reset to role defaults (save to persist)', { icon: '🔄' });
+    }
   };
 
   // ── Invite handlers ──────────────────────────────────────────────────────
