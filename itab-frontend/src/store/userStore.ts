@@ -14,12 +14,15 @@ import { apiSend } from '../lib/apiCall';
 export { DEFAULT_PERMISSIONS as DEFAULT_ROLE_PERMISSIONS } from '../lib/defaultPermissions';
 
 export type AuditAction =
-  | 'user_suspended' | 'user_banned' | 'user_unsuspended' | 'user_invited'
+  | 'user_suspended' | 'user_banned' | 'user_unsuspended' | 'user_invited' | 'user_registered'
   | 'kyc_approved' | 'kyc_rejected'
   | 'agent_approved' | 'agent_rejected'
   | 'dispute_raised' | 'dispute_resolved' | 'dispute_dismissed'
   | 'transaction_retried' | 'transaction_refunded'
-  | 'property_approved' | 'property_rejected'
+  | 'property_created' | 'property_approved' | 'property_rejected'
+  | 'inspection_booked'
+  | 'maintenance_submitted'
+  | 'payout_processed'
   | 'fee_config_updated' | 'announcement_sent'
   | 'login' | 'logout' | 'settings_changed';
 

@@ -1013,6 +1013,13 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     res.status(201).json({ data: { user, token } });
+    // Audit log: user registered (fire-and-forget)
+    pool.query(
+      `INSERT INTO audit_logs (id,action,performed_by,performed_by_name,performed_by_role,target_name,description)
+       VALUES ($1,'user_registered',$2,$3,$4,$5,$6)`,
+      [uuidv4(), id, `${firstName} ${lastName}`, assignedRole, `${firstName} ${lastName}`,
+       `New ${assignedRole} account registered`]
+    ).catch(() => {});
   } catch (err) {
     console.error('register error:', err);
     res.status(500).json({ message: 'Server error' });
@@ -1489,6 +1496,12 @@ app.post('/api/properties', auth, requireRole('admin', 'property_manager', 'agen
       ]
     );
     await scanPropertyLocationConflicts(id);
+    // Audit log: property created
+    pool.query(
+      `INSERT INTO audit_logs (id,action,performed_by,performed_by_name,performed_by_role,target_id,target_name,description)
+       VALUES ($1,'property_created',$2,$3,$4,$5,$6,$7)`,
+      [uuidv4(), req.user.id, req.user.name, req.user.role, id, title, `Property "${title}" created in ${district}`]
+    ).catch(() => {});
     res.status(201).json({ data: formatProperty(result.rows[0]) });
   } catch (err) {
     console.error(err);
@@ -1715,6 +1728,13 @@ app.post('/api/inspections', auth, requireRole('tenant'), requirePerm('inspectio
       [id, propertyId, prop.rows[0].title, prop.rows[0].address, req.user.id,
        `${tenant.first_name} ${tenant.last_name}`, prop.rows[0].manager_id, scheduledDate, scheduledTime]
     );
+    // Audit log: inspection booked
+    pool.query(
+      `INSERT INTO audit_logs (id,action,performed_by,performed_by_name,performed_by_role,target_name,description)
+       VALUES ($1,'inspection_booked',$2,$3,$4,$5,$6)`,
+      [uuidv4(), req.user.id, `${tenant.first_name} ${tenant.last_name}`, req.user.role,
+       prop.rows[0].title, `Inspection booked for "${prop.rows[0].title}" on ${scheduledDate}`]
+    ).catch(() => {});
     res.status(201).json({ data: formatInspection(result.rows[0]) });
   } catch (err) {
     console.error(err);
@@ -1995,6 +2015,13 @@ app.post('/api/maintenance', auth, requireRole('tenant', 'property_manager', 'la
       [id, propertyId, propertyTitle, req.user.id, `${tenant.first_name} ${tenant.last_name}`,
        title, description, priority || 'normal', JSON.stringify(photos || [])]
     );
+    // Audit log: maintenance request submitted
+    pool.query(
+      `INSERT INTO audit_logs (id,action,performed_by,performed_by_name,performed_by_role,target_name,description)
+       VALUES ($1,'maintenance_submitted',$2,$3,$4,$5,$6)`,
+      [uuidv4(), req.user.id, `${tenant.first_name} ${tenant.last_name}`, req.user.role,
+       propertyTitle || 'Property', `Maintenance request "${title}" submitted for ${propertyTitle}`]
+    ).catch(() => {});
     res.status(201).json({ data: formatMaintenance(result.rows[0]) });
   } catch (err) {
     console.error(err);
@@ -2073,7 +2100,15 @@ app.post('/api/payouts/:id/process', auth, requireRole('admin', 'property_manage
       "UPDATE payouts SET status='completed', processed_at=NOW() WHERE id=$1 RETURNING *",
       [req.params.id]
     );
-    res.json({ data: formatPayout(result.rows[0]) });
+    const p = result.rows[0];
+    // Audit log: payout processed
+    pool.query(
+      `INSERT INTO audit_logs (id,action,performed_by,performed_by_name,performed_by_role,target_name,description)
+       VALUES ($1,'payout_processed',$2,$3,$4,$5,$6)`,
+      [uuidv4(), req.user.id, req.user.name, req.user.role,
+       p?.landlord_name || 'Landlord', `Payout of ${p?.net_amount || 0} UGX processed for ${p?.property_title || 'property'}`]
+    ).catch(() => {});
+    res.json({ data: formatPayout(p) });
   } catch (err) {
     res.status(500).json({ message: 'Server error' });
   }
@@ -2743,15 +2778,123 @@ app.get('/api/analytics/occupancy', auth, requirePerm('analytics', 'viewBasicAna
   }
 });
 
+// New: per-month inspection stats
+app.get('/api/analytics/inspections', auth, requirePerm('analytics', 'viewBasicAnalytics'), async (req, res) => {
+  try {
+    const [monthly, statuses] = await Promise.all([
+      pool.query(`
+        SELECT date_trunc('month', created_at) as month, COUNT(*) as total,
+               COUNT(CASE WHEN fee_paid THEN 1 END) as paid
+        FROM inspections
+        GROUP BY month ORDER BY month DESC LIMIT 12
+      `),
+      pool.query(`
+        SELECT status, COUNT(*) as count FROM inspections GROUP BY status
+      `),
+    ]);
+    res.json({ data: { monthly: monthly.rows, statuses: statuses.rows } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// New: maintenance breakdown
+app.get('/api/analytics/maintenance', auth, requirePerm('analytics', 'viewBasicAnalytics'), async (req, res) => {
+  try {
+    const [byStatus, byPriority, avgResolution] = await Promise.all([
+      pool.query(`SELECT status, COUNT(*) as count FROM maintenance_requests GROUP BY status`),
+      pool.query(`SELECT priority, COUNT(*) as count FROM maintenance_requests GROUP BY priority`),
+      pool.query(`
+        SELECT ROUND(AVG(EXTRACT(EPOCH FROM (completed_at - created_at))/86400),1) as avg_days
+        FROM maintenance_requests WHERE status='completed' AND completed_at IS NOT NULL
+      `),
+    ]);
+    res.json({
+      data: {
+        byStatus: byStatus.rows,
+        byPriority: byPriority.rows,
+        avgResolutionDays: parseFloat(avgResolution.rows[0]?.avg_days) || 0,
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// New: user registration growth (last 12 months)
+app.get('/api/analytics/users', auth, requireRole('admin'), requirePerm('analytics', 'viewBasicAnalytics'), async (req, res) => {
+  try {
+    const [growth, byRole, kycStats] = await Promise.all([
+      pool.query(`
+        SELECT date_trunc('month', created_at) as month, COUNT(*) as count
+        FROM users GROUP BY month ORDER BY month DESC LIMIT 12
+      `),
+      pool.query(`SELECT role, COUNT(*) as count FROM users GROUP BY role`),
+      pool.query(`
+        SELECT kyc_status, COUNT(*) as count FROM users GROUP BY kyc_status
+      `),
+    ]);
+    res.json({ data: { growth: growth.rows, byRole: byRole.rows, kycStats: kycStats.rows } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// New: revenue breakdown by payment type
+app.get('/api/analytics/revenue-breakdown', auth, requireRole('admin', 'property_manager'), requireAnyPerm([['analytics', 'viewPlatformRevenue'], ['analytics', 'viewBasicAnalytics']]), async (req, res) => {
+  try {
+    const [byType, monthly, topProperties] = await Promise.all([
+      pool.query(`
+        SELECT type, COALESCE(SUM(amount),0) as total, COUNT(*) as count
+        FROM payments WHERE status='completed'
+        GROUP BY type
+      `),
+      pool.query(`
+        SELECT date_trunc('month', created_at) as month,
+               COALESCE(SUM(amount),0) as total,
+               COALESCE(SUM(CASE WHEN type='rent' THEN amount ELSE 0 END),0) as rent,
+               COALESCE(SUM(CASE WHEN type='inspection_fee' THEN amount ELSE 0 END),0) as inspection
+        FROM payments WHERE status='completed'
+        GROUP BY month ORDER BY month DESC LIMIT 12
+      `),
+      pool.query(`
+        SELECT property_title, COALESCE(SUM(amount),0) as total
+        FROM payments WHERE status='completed' AND property_title IS NOT NULL
+        GROUP BY property_title ORDER BY total DESC LIMIT 5
+      `),
+    ]);
+    res.json({ data: { byType: byType.rows, monthly: monthly.rows, topProperties: topProperties.rows } });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUDIT LOGS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/api/audit-logs', auth, requireRole('admin'), requirePerm('admin', 'viewAuditLogs'), async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200');
-    res.json({ data: result.rows.map(formatAuditLog) });
+    const { from, to, action, limit = 500, offset = 0 } = req.query;
+    const conditions = [];
+    const params = [];
+    if (from) { params.push(from); conditions.push(`created_at >= $${params.length}`); }
+    if (to)   { params.push(to);   conditions.push(`created_at <= $${params.length}::date + interval '1 day'`); }
+    if (action) { params.push(action); conditions.push(`action = $${params.length}`); }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(Math.min(parseInt(limit) || 500, 1000));
+    params.push(parseInt(offset) || 0);
+    const result = await pool.query(
+      `SELECT * FROM audit_logs ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    );
+    const countRes = await pool.query(
+      `SELECT COUNT(*) FROM audit_logs ${where}`,
+      params.slice(0, params.length - 2)
+    );
+    res.json({ data: result.rows.map(formatAuditLog), total: parseInt(countRes.rows[0].count) });
   } catch (err) {
+    console.error('audit-logs GET:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

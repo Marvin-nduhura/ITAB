@@ -152,9 +152,13 @@ export const messagesApi = {
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 export const analyticsApi = {
-  dashboard: () => api.get<ApiResponse<unknown>>('/analytics/dashboard'),
-  revenue:   (params?: Record<string, unknown>) => api.get<ApiResponse<unknown>>('/analytics/revenue', { params }),
-  occupancy: () => api.get<ApiResponse<unknown>>('/analytics/occupancy'),
+  dashboard:        () => api.get<ApiResponse<unknown>>('/analytics/dashboard'),
+  revenue:          (params?: Record<string, unknown>) => api.get<ApiResponse<unknown>>('/analytics/revenue', { params }),
+  occupancy:        () => api.get<ApiResponse<unknown>>('/analytics/occupancy'),
+  inspections:      () => api.get<ApiResponse<unknown>>('/analytics/inspections'),
+  maintenance:      () => api.get<ApiResponse<unknown>>('/analytics/maintenance'),
+  users:            () => api.get<ApiResponse<unknown>>('/analytics/users'),
+  revenueBreakdown: () => api.get<ApiResponse<unknown>>('/analytics/revenue-breakdown'),
 };
 
 // ─── Vendors ─────────────────────────────────────────────────────────────────
