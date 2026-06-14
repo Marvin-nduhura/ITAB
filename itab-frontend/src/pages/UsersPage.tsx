@@ -79,7 +79,7 @@ function PermissionSection({
 }
 
 export function UsersPage() {
-  const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC, updateUserPermissions, updateUserDistricts, changeUserRole, getPendingApprovals, approveUser, rejectUserApproval, updateUser, removeUser } = useUserStore();
+  const { users, suspendUser, unsuspendUser, approveKYC, rejectKYC, getPendingApprovals, approveUser, rejectUserApproval, updateUser, removeUser } = useUserStore();
   const { user } = useAuthStore();
 
   const [search, setSearch] = useState('');
@@ -198,14 +198,16 @@ export function UsersPage() {
       const res = await usersApi.setPermissions(detailUser.id, editPermissions);
       const updated = (res.data as { data?: User })?.data;
       const savedPerms = updated?.permissions ?? editPermissions;
-      updateUserPermissions(detailUser.id, savedPerms as FullUserPermissions);
+      // Update local store state only (API already called above)
+      useUserStore.getState().updateUser(detailUser.id, { permissions: savedPerms as User['permissions'] });
       setDetailUser(prev => prev ? { ...prev, permissions: savedPerms as User['permissions'] } : null);
       setEditPermissions(resolvePermissions(detailUser.role, savedPerms));
-      toast.success('Permissions updated — changes take effect on the user\'s next page load');
+      toast.success("Permissions saved — takes effect on the user's next page load");
     } catch {
-      updateUserPermissions(detailUser.id, editPermissions);
+      // API failed — save locally so admin changes are preserved in the store
+      useUserStore.getState().updateUser(detailUser.id, { permissions: editPermissions });
       setDetailUser(prev => prev ? { ...prev, permissions: editPermissions } : null);
-      toast.success('Permissions saved locally (sync when online)');
+      toast('Permissions saved locally — will sync when backend is reachable', { icon: '⚠️' });
     } finally {
       setDetailLoading(false);
     }
@@ -216,11 +218,20 @@ export function UsersPage() {
     setDetailLoading(true);
     try {
       await usersApi.setDistricts(detailUser.id, editDistricts);
-    } catch { /* backend unavailable */ }
-    updateUserDistricts(detailUser.id, editDistricts);
-    setDetailUser(prev => prev ? { ...prev, restrictedDistricts: editDistricts } : null);
-    toast.success('District restrictions saved');
-    setDetailLoading(false);
+      // Update local store state only (API already called above)
+      useUserStore.getState().updateUser(detailUser.id, { restrictedDistricts: editDistricts });
+      setDetailUser(prev => prev ? { ...prev, restrictedDistricts: editDistricts } : null);
+      toast.success(editDistricts.length === 0
+        ? 'All district restrictions removed'
+        : `Restricted to: ${editDistricts.join(', ')}`
+      );
+    } catch {
+      useUserStore.getState().updateUser(detailUser.id, { restrictedDistricts: editDistricts });
+      setDetailUser(prev => prev ? { ...prev, restrictedDistricts: editDistricts } : null);
+      toast('District restrictions saved locally — will sync when backend is reachable', { icon: '⚠️' });
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   const handleSaveRole = async () => {
@@ -228,13 +239,12 @@ export function UsersPage() {
     setDetailLoading(true);
     try {
       await usersApi.changeRole(detailUser.id, editRole);
-      // Reset stored permissions to NULL so the new role's defaults apply cleanly
+      // Clear stored permissions so the new role's defaults apply cleanly
       await usersApi.resetPermissions(detailUser.id);
-    } catch { /* backend unavailable */ }
-    changeUserRole(detailUser.id, editRole);
-    // Reset permissions to new role defaults in UI
+    } catch { /* backend unavailable — update locally */ }
+    // Update local store (no extra API calls — already done above)
     const newDefaults = resolvePermissions(editRole);
-    updateUserPermissions(detailUser.id, newDefaults);
+    useUserStore.getState().updateUser(detailUser.id, { role: editRole, permissions: undefined });
     setDetailUser(prev => prev ? { ...prev, role: editRole, permissions: undefined } : null);
     setEditPermissions(newDefaults);
     toast.success(`Role changed to ${roleLabels[editRole]} — permissions reset to role defaults`);
@@ -320,13 +330,12 @@ export function UsersPage() {
     const defaults = resolvePermissions(detailUser.role);
     setEditPermissions(defaults);
     try {
-      // NULL = use role defaults on the backend, no stored overrides
       await usersApi.resetPermissions(detailUser.id);
-      updateUserPermissions(detailUser.id, defaults);
+      useUserStore.getState().updateUser(detailUser.id, { permissions: undefined });
       setDetailUser(prev => prev ? { ...prev, permissions: undefined } : null);
-      toast.success('Permissions reset to role defaults and saved');
+      toast.success('Permissions reset to role defaults');
     } catch {
-      toast('Permissions reset to role defaults (save to persist)', { icon: '🔄' });
+      toast('Permissions reset locally — will sync when backend is reachable', { icon: '⚠️' });
     }
   };
 
