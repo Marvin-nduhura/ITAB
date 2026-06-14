@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 import { AppLayout } from './components/layout/AppLayout';
@@ -59,7 +59,9 @@ const queryClient = new QueryClient({
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
-  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  const location = useLocation();
+  // Allow guests to use /search inside the app layout (SearchPage handles guest state)
+  if (!isAuthenticated && location.pathname !== '/search') return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
 
@@ -122,8 +124,6 @@ export default function App() {
             {/* ── Public routes (no auth needed) ── */}
             <Route path="/"              element={<LandingOrDashboard />} />
             <Route path="/browse/:id"    element={<PublicPropertyPage />} />
-            {/* /search is public — guests see standalone, auth users get it in AppLayout too */}
-            <Route path="/search"        element={<SearchPage />} />
 
             {/* Public auth routes */}
             <Route path="/login"           element={<PublicRoute><LoginPage /></PublicRoute>} />
