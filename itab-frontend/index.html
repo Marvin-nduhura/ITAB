@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- ── Primary meta ─────────────────────────────────────────────── -->
+    <title>ITAB Property Services</title>
+    <meta name="description" content="Uganda's premier property brokerage and management platform. Find, rent, and manage properties." />
+    <meta name="keywords" content="property, Uganda, rent, Kampala, real estate, apartments, houses" />
+    <meta name="author" content="ITAB Property Services" />
+    <meta name="robots" content="index, follow" />
+
+    <!-- ── Theme color (light + dark) ───────────────────────────────── -->
+    <meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1e3a8a" media="(prefers-color-scheme: dark)" />
+
+    <!-- ── PWA manifest ─────────────────────────────────────────────── -->
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- ── Favicon ──────────────────────────────────────────────────── -->
+    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32"  href="/icons/icon-96.png" />
+    <link rel="icon" type="image/png" sizes="16x16"  href="/icons/icon-72.png" />
+
+    <!-- ── iOS / iPadOS / macOS Safari ──────────────────────────────── -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ITAB" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/icons/icon-192.png" />
+
+    <!-- iOS splash screens (portrait) -->
+    <meta name="apple-touch-fullscreen" content="yes" />
+
+    <!-- ── Windows / Edge ───────────────────────────────────────────── -->
+    <meta name="msapplication-TileColor" content="#2563eb" />
+    <meta name="msapplication-TileImage" content="/icons/icon-144.png" />
+    <meta name="msapplication-config" content="none" />
+    <meta name="application-name" content="ITAB" />
+
+    <!-- ── Open Graph (social sharing) ─────────────────────────────── -->
+    <meta property="og:type"        content="website" />
+    <meta property="og:title"       content="ITAB Property Services" />
+    <meta property="og:description" content="Uganda's premier property brokerage and management platform." />
+    <meta property="og:image"       content="/icons/icon-512.png" />
+    <meta property="og:url"         content="https://itab.ug" />
+    <meta property="og:site_name"   content="ITAB Property Services" />
+
+    <!-- ── Twitter card ─────────────────────────────────────────────── -->
+    <meta name="twitter:card"        content="summary" />
+    <meta name="twitter:title"       content="ITAB Property Services" />
+    <meta name="twitter:description" content="Uganda's premier property brokerage and management platform." />
+    <meta name="twitter:image"       content="/icons/icon-512.png" />
+
+    <!-- ── Fonts ────────────────────────────────────────────────────── -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+    <!-- ── Inline critical CSS: prevent flash of unstyled content ───── -->
+    <style>
+      html { background: #f8fafc; }
+      html.dark { background: #0f172a; }
+      body { margin: 0; font-family: Inter, system-ui, sans-serif; }
+      #root { min-height: 100vh; }
+      /* iOS safe area support */
+      body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
