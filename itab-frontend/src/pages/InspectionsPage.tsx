@@ -2,22 +2,177 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Calendar, CheckCircle2, XCircle, Clock, AlertCircle,
-  Download, ThumbsDown, ThumbsUp, Info, Building2, QrCode, RefreshCw,
+  Download, ThumbsDown, ThumbsUp, Info, Building2, QrCode, RefreshCw, Smartphone,
 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
+import { Input } from '../components/ui/Input';
 import { EmptyState } from '../components/ui/EmptyState';
 import { QRCodeDisplay } from '../components/ui/QRCodeDisplay';
 import { useAuthStore } from '../store/authStore';
 import { useDataStore } from '../store/dataStore';
 import { usePropertyStore } from '../store/propertyStore';
-import { inspectionsApi } from '../lib/api';
+import { inspectionsApi, paymentsApi } from '../lib/api';
 import { formatCurrency, formatDate, inspectionStatusConfig, INSPECTION_FEE } from '../lib/utils';
 import { downloadReceipt } from '../lib/download';
 import { filterInspectionsForUser } from '../lib/rbac';
 import type { Inspection } from '../types';
 import toast from 'react-hot-toast';
+
+// ─── Pay Inspection Fee Modal ─────────────────────────────────────────────────
+interface PayInspFeeModalProps {
+  open: boolean;
+  inspection: Inspection | null;
+  onClose: () => void;
+  onPaid: () => void;
+}
+
+function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFeeModalProps) {
+  const [method, setMethod] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [awaitingPin, setAwaitingPin] = useState(false);
+  const [payRef, setPayRef] = useState('');
+  const [timedOut, setTimedOut] = useState(false);
+
+  if (!inspection) return null;
+  const fee = inspection.feeAmount || INSPECTION_FEE;
+
+  const handlePay = async () => {
+    if (!phone.trim()) { toast.error('Enter your mobile money phone number'); return; }
+    setLoading(true);
+    try {
+      const ref = `${method === 'mtn_momo' ? 'MTN' : 'AIR'}-INSP-${Date.now()}`;
+
+      // Initiate mobile money — user gets USSD prompt on their phone
+      if (method === 'mtn_momo') {
+        await paymentsApi.initMTN({ amount: fee, phone, type: 'inspection_fee', reference: ref });
+      } else {
+        await paymentsApi.initAirtel({ amount: fee, phone, type: 'inspection_fee', reference: ref });
+      }
+
+      // Mark inspection fee as pending in DB
+      await inspectionsApi.pay(inspection.id, { method, reference: ref, status: 'pending' });
+
+      setLoading(false);
+      setPayRef(ref);
+      setAwaitingPin(true);
+      setTimedOut(false);
+
+      // Poll until mobile money callback fires
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+      setAwaitingPin(false);
+
+      if (result.status === 'completed') {
+        // Mark fee as fully paid
+        await inspectionsApi.pay(inspection.id, { method, reference: ref, status: 'completed' });
+        onPaid();
+        onClose();
+        toast.success(`✅ Inspection fee of ${formatCurrency(fee)} paid! A USSD receipt was sent to ${phone}.`);
+      } else {
+        setTimedOut(true);
+        toast.error('Payment not confirmed. Please check your phone and try again.');
+      }
+    } catch {
+      setLoading(false);
+      setAwaitingPin(false);
+      toast.error('Payment failed. Check your connection and try again.');
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={awaitingPin ? undefined : onClose}
+      title="Pay Inspection Fee"
+      size="sm"
+      footer={
+        awaitingPin ? (
+          <div className="w-full flex flex-col items-center gap-2 py-1">
+            <div className="flex items-center gap-3">
+              <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for PIN confirmation...</span>
+            </div>
+            {timedOut && (
+              <Button size="sm" variant="secondary" onClick={() => { setAwaitingPin(false); setTimedOut(false); }}>
+                Try Again
+              </Button>
+            )}
+          </div>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button loading={loading} onClick={handlePay} icon={<Smartphone size={14} />}>
+              Pay {formatCurrency(fee)}
+            </Button>
+          </>
+        )
+      }
+    >
+      <div className="space-y-4">
+        {/* Awaiting PIN */}
+        {awaitingPin && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="flex flex-col items-center gap-3 p-5 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+            <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            <div>
+              <p className="font-bold text-primary-800 dark:text-primary-300">Check your phone!</p>
+              <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                A {method === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} prompt was sent to <strong>{phone}</strong>.
+              </p>
+              <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                Enter your PIN to confirm <strong>{formatCurrency(fee)}</strong>.
+              </p>
+              <p className="text-xs text-slate-400 mt-2">ref: {payRef}</p>
+            </div>
+          </motion.div>
+        )}
+
+        {!awaitingPin && (
+          <>
+            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-xl p-3 text-sm">
+              <p className="font-semibold text-purple-800 dark:text-purple-300">{inspection.propertyTitle}</p>
+              <p className="text-purple-600 dark:text-purple-400 text-xs mt-1">Non-refundable · credited toward first rent if you sign</p>
+              <p className="text-xl font-bold text-purple-700 dark:text-purple-300 mt-2">{formatCurrency(fee)}</p>
+            </div>
+
+            {/* Method */}
+            <div>
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment method</p>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { value: 'mtn_momo' as const, label: 'MTN MoMo', color: 'bg-yellow-400' },
+                  { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500' },
+                ].map(m => (
+                  <button key={m.value} onClick={() => setMethod(m.value)}
+                    className={`p-3 rounded-xl border-2 text-center transition-all ${method === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
+                    <div className={`w-7 h-7 ${m.color} rounded-full mx-auto mb-1`} />
+                    <p className="text-xs font-medium text-slate-700 dark:text-slate-300">{m.label}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Input
+              label={`${method === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} Phone Number`}
+              type="tel"
+              placeholder="07XX XXX XXX"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              icon={<Smartphone size={15} />}
+              hint="You will receive a PIN prompt on this number"
+            />
+
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-xs text-amber-700 dark:text-amber-400">
+              ⚠️ Inspection fees are <strong>non-refundable</strong>. The fee will be credited toward your first month's rent if you sign a lease.
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
 
 // ─── Decline Lease Modal ──────────────────────────────────────────────────────
 interface DeclineModalProps {
@@ -138,6 +293,8 @@ export function InspectionsPage() {
   const [declineTarget, setDeclineTarget] = useState<Inspection | null>(null);
   const [tab, setTab] = useState<'upcoming' | 'past' | 'declined'>('upcoming');
   const [showQR, setShowQR] = useState(false);
+  const [showPayFee, setShowPayFee] = useState(false);
+  const [payFeeTarget, setPayFeeTarget] = useState<Inspection | null>(null);
 
   const upcoming = inspections.filter(i => ['pending', 'confirmed'].includes(i.status));
   const past = inspections.filter(i => ['completed', 'cancelled', 'no_show'].includes(i.status) && !i.leaseDeclined);
@@ -280,7 +437,7 @@ export function InspectionsPage() {
                           {isDeclined
                             ? <Badge variant="gray">Lease Declined</Badge>
                             : <Badge variant={sc.color.replace('badge-', '') as 'blue'}>{sc.label}</Badge>}
-                          {insp.feePaid
+                      {insp.feePaid
                             ? <Badge variant="green">Fee Paid ✓</Badge>
                             : <Badge variant="yellow">Fee Pending</Badge>}
                         </div>
@@ -297,6 +454,12 @@ export function InspectionsPage() {
                     <div className="flex flex-col items-end gap-2 flex-shrink-0">
                       <p className="text-sm font-bold text-slate-900 dark:text-slate-100">{formatCurrency(insp.feeAmount)}</p>
                       <div className="flex gap-1.5">
+                        {user?.role === 'tenant' && !insp.feePaid && !isDeclined && (
+                          <Button size="sm" variant="gold" icon={<Smartphone size={13} />}
+                            onClick={() => { setPayFeeTarget(insp); setShowPayFee(true); }}>
+                            Pay Fee
+                          </Button>
+                        )}
                         {insp.feePaid && (
                           <Button size="sm" variant="secondary" icon={<QrCode size={13} />}
                             onClick={() => { setSelected(insp); setShowQR(true); }}>
@@ -476,6 +639,14 @@ export function InspectionsPage() {
           </div>
         )}
       </Modal>
+
+      {/* Pay Inspection Fee Modal */}
+      <PayInspectionFeeModal
+        open={showPayFee}
+        inspection={payFeeTarget}
+        onClose={() => { setShowPayFee(false); setPayFeeTarget(null); }}
+        onPaid={fetchInspections}
+      />
 
       {/* Decline Lease Modal */}
       <DeclineLeaseModal

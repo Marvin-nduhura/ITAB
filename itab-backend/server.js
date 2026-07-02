@@ -1801,13 +1801,34 @@ app.patch('/api/inspections/:id/no-show', auth, requirePerm('inspections', 'mark
 
 app.post('/api/inspections/:id/pay', auth, requirePerm('inspections', 'payInspectionFee'), async (req, res) => {
   try {
-    const { method, reference } = req.body;
+    const { method, reference, status } = req.body;
+    const payStatus = status || 'pending'; // pending until mobile money callback confirms
     const result = await pool.query(
-      `UPDATE inspections SET fee_paid=true, payment_method=$1, payment_ref=$2, updated_at=NOW() WHERE id=$3 RETURNING *`,
-      [method, reference, req.params.id]
+      `UPDATE inspections SET
+         fee_paid = CASE WHEN $1 = 'completed' THEN true ELSE fee_paid END,
+         payment_method = $2,
+         payment_ref = $3,
+         updated_at = NOW()
+       WHERE id = $4 RETURNING *`,
+      [payStatus, method, reference, req.params.id]
     );
+    if (!result.rows.length) return res.status(404).json({ message: 'Inspection not found' });
+
+    // Also insert/upsert a payments record for the fee
+    const insp = result.rows[0];
+    await pool.query(
+      `INSERT INTO payments (id, type, amount, currency, status, method, reference, property_id, property_title, tenant_id, tenant_name, created_at)
+       VALUES ($1,'inspection_fee',$2,'UGX',$3,$4,$5,$6,$7,$8,$9,NOW())
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        uuidv4(), insp.fee_amount || 100000, payStatus, method, reference,
+        insp.property_id, insp.property_title, insp.tenant_id, insp.tenant_name,
+      ]
+    ).catch(() => {});
+
     res.json({ data: formatInspection(result.rows[0]) });
   } catch (err) {
+    console.error('inspection pay:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -1855,15 +1876,17 @@ app.get('/api/payments/:id', auth, requireAnyPerm([['payments', 'viewOwnPayments
 
 app.post('/api/payments/rent', auth, requireRole('tenant'), requireAnyPerm([['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance']]), async (req, res) => {
   try {
-    const { propertyId, propertyTitle, amount, method, reference, rentPeriod, isPartial, inspectionCreditApplied, landlordId } = req.body;
+    const { propertyId, propertyTitle, amount, method, reference, rentPeriod, isPartial, inspectionCreditApplied, landlordId, status } = req.body;
     const id = uuidv4();
     const tenantResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
     const tenant = tenantResult.rows[0];
+    // Use provided status (pending for mobile money — callback will update to completed)
+    const payStatus = status || 'completed';
     const result = await pool.query(
       `INSERT INTO payments (id, type, amount, currency, status, method, reference, property_id, property_title,
        tenant_id, tenant_name, landlord_id, inspection_credit_applied, rent_period, is_partial, paid_at)
-       VALUES ($1,$2,$3,'UGX','completed',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW()) RETURNING *`,
-      [id, isPartial ? 'rent_partial' : 'rent', amount, method, reference || `PAY-${Date.now()}`,
+       VALUES ($1,$2,$3,'UGX',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $4='completed' THEN NOW() ELSE NULL END) RETURNING *`,
+      [id, isPartial ? 'rent_partial' : 'rent', amount, payStatus, method, reference || `PAY-${Date.now()}`,
        propertyId, propertyTitle, req.user.id, `${tenant.first_name} ${tenant.last_name}`,
        landlordId || null, inspectionCreditApplied || 0, rentPeriod || null, isPartial || false]
     );

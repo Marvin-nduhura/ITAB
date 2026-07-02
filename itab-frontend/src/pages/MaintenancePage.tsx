@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Wrench, Plus, AlertCircle, Clock, CheckCircle2, UserCheck, Star, Phone, RotateCcw, XCircle, ArrowLeft } from 'lucide-react';
+import { Wrench, Plus, AlertCircle, Clock, CheckCircle2, UserCheck, Star, Phone, RotateCcw, XCircle, ArrowLeft, Smartphone, DollarSign } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -12,7 +12,8 @@ import { useAuthStore } from '../store/authStore';
 import { useVendorStore } from '../store/vendorStore';
 import { useDataStore } from '../store/dataStore';
 import { usePropertyStore } from '../store/propertyStore';
-import { maintenanceApi } from '../lib/api';
+import { usePaymentStore } from '../store/paymentStore';
+import { maintenanceApi, paymentsApi } from '../lib/api';
 import { formatDate, formatCurrency, maintenanceStatusConfig } from '../lib/utils';
 import { filterMaintenanceForUser, canDo } from '../lib/rbac';
 import type { MaintenanceRequest, VendorCategory } from '../types';
@@ -31,6 +32,7 @@ export function MaintenancePage() {
   const { vendors, assignJob, completeJob, rateVendor, getJobsByMaintenance } = useVendorStore();
   const { maintenance: allMaintenance, setMaintenance } = useDataStore();
   const { properties: allProperties } = usePropertyStore();
+  const { payVendor } = usePaymentStore();
   const [, setRefreshing] = useState(false);
 
   // Fetch fresh from Render DB on mount
@@ -60,6 +62,18 @@ export function MaintenancePage() {
   const [showRateModal, setShowRateModal] = useState<{ request: MaintenanceRequest; jobId: string; vendorId: string; vendorName: string } | null>(null);
   const [showRevertModal, setShowRevertModal] = useState<{ request: MaintenanceRequest; targetStatus: MaintenanceRequest['status']; label: string } | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Pay vendor modal state
+  const [showPayVendorModal, setShowPayVendorModal] = useState<{
+    vendorId: string; vendorName: string; jobId: string;
+    propertyTitle: string; amount: number; description: string;
+  } | null>(null);
+  const [vendorPhone, setVendorPhone] = useState('');
+  const [vendorPayMethod, setVendorPayMethod] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [vendorPayLoading, setVendorPayLoading] = useState(false);
+  const [vendorAwaitingPin, setVendorAwaitingPin] = useState(false);
+  const [vendorPayRef, setVendorPayRef] = useState('');
+  const [vendorPayTimedOut, setVendorPayTimedOut] = useState(false);
   // New request form
   const [form, setForm] = useState({ title: '', description: '', priority: 'normal' });
   const [photos, setPhotos] = useState<UploadedFile[]>([]);
@@ -160,17 +174,96 @@ export function MaintenancePage() {
       await maintenanceApi.update(showCompleteModal.id, { status: 'completed', actualCost: Number(actualCost) || undefined });
       await fetchMaintenance();
     } catch { /* keep local */ }
-    const vendorId = showCompleteModal.vendorId;
+    const vendorId   = showCompleteModal.vendorId;
     const vendorName = showCompleteModal.vendorName;
-    const jobId = job?.id || '';
+    const jobId      = job?.id || '';
+    const costAmount = Number(actualCost) || 0;
+    const propTitle  = showCompleteModal.propertyTitle;
+    const reqTitle   = showCompleteModal.title;
+
     setShowCompleteModal(null);
     setActualCost('');
     setCompletionNotes('');
     toast.success('Request marked as completed!');
-    if (vendorId && vendorName && jobId) {
+
+    // Pre-fill vendor phone from vendor store if available
+    const vendorObj = vendors.find(v => v.id === vendorId);
+    if (vendorObj?.phone) setVendorPhone(vendorObj.phone);
+
+    // Open pay-vendor modal if there's an amount and a vendor
+    if (vendorId && vendorName && costAmount > 0) {
+      setTimeout(() => {
+        setShowPayVendorModal({
+          vendorId, vendorName, jobId,
+          propertyTitle: propTitle,
+          amount: costAmount,
+          description: `Payment for: ${reqTitle} at ${propTitle}`,
+        });
+        // After a short delay, prompt to rate too
+        if (jobId) {
+          setTimeout(() => {
+            setShowRateModal({ request: showCompleteModal, jobId, vendorId, vendorName });
+          }, 2000);
+        }
+      }, 400);
+    } else if (vendorId && vendorName && jobId) {
       setTimeout(() => {
         setShowRateModal({ request: showCompleteModal, jobId, vendorId, vendorName });
       }, 500);
+    }
+  };
+
+  // Handle vendor payment via mobile money
+  const handlePayVendor = async () => {
+    if (!showPayVendorModal) return;
+    if (!vendorPhone.trim()) { toast.error('Enter the vendor\'s mobile money phone number'); return; }
+
+    setVendorPayLoading(true);
+    try {
+      const ref = `${vendorPayMethod === 'mtn_momo' ? 'MTN' : 'AIR'}-VND-${Date.now()}`;
+
+      // Initiate mobile money push to vendor's phone
+      if (vendorPayMethod === 'mtn_momo') {
+        await paymentsApi.initMTN({ amount: showPayVendorModal.amount, phone: vendorPhone, type: 'vendor_payment', reference: ref });
+      } else {
+        await paymentsApi.initAirtel({ amount: showPayVendorModal.amount, phone: vendorPhone, type: 'vendor_payment', reference: ref });
+      }
+
+      // Record the transaction in the payment store (creates audit trail)
+      payVendor({
+        vendorId: showPayVendorModal.vendorId,
+        vendorName: showPayVendorModal.vendorName,
+        jobId: showPayVendorModal.jobId,
+        propertyTitle: showPayVendorModal.propertyTitle,
+        amount: showPayVendorModal.amount,
+        description: showPayVendorModal.description,
+        managerId: user?.id || '',
+        managerName: `${user?.firstName} ${user?.lastName}`,
+        paymentMethod: vendorPayMethod,
+        receiverPhone: vendorPhone,
+      });
+
+      setVendorPayLoading(false);
+      setVendorPayRef(ref);
+      setVendorAwaitingPin(true);
+      setVendorPayTimedOut(false);
+
+      // Poll for callback confirmation
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+      setVendorAwaitingPin(false);
+
+      if (result.status === 'completed') {
+        setShowPayVendorModal(null);
+        setVendorPhone('');
+        toast.success(`✅ ${formatCurrency(showPayVendorModal.amount)} sent to ${showPayVendorModal.vendorName} via ${vendorPayMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'}!`);
+      } else {
+        setVendorPayTimedOut(true);
+        toast.error('Payment not confirmed. The vendor should check their phone.');
+      }
+    } catch {
+      setVendorPayLoading(false);
+      setVendorAwaitingPin(false);
+      toast.error('Payment failed. Please try again.');
     }
   };
 
@@ -447,6 +540,108 @@ export function MaintenancePage() {
             </div>
             <Input label="Actual Cost (UGX)" type="number" placeholder="Enter the final cost" value={actualCost} onChange={e => setActualCost(e.target.value)} />
             <Textarea label="Completion Notes" placeholder="Describe what was done..." value={completionNotes} onChange={e => setCompletionNotes(e.target.value)} rows={3} />
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Pay Vendor Modal ──────────────────────────────────────────── */}
+      <Modal
+        open={!!showPayVendorModal}
+        onClose={vendorAwaitingPin ? undefined : () => { setShowPayVendorModal(null); setVendorPhone(''); setVendorAwaitingPin(false); }}
+        title="Pay Vendor"
+        size="sm"
+        footer={
+          vendorAwaitingPin ? (
+            <div className="w-full flex flex-col items-center gap-2 py-1">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for PIN confirmation...</span>
+              </div>
+              {vendorPayTimedOut && (
+                <Button size="sm" variant="secondary" onClick={() => { setVendorAwaitingPin(false); setVendorPayTimedOut(false); }}>
+                  Try Again
+                </Button>
+              )}
+            </div>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => { setShowPayVendorModal(null); setVendorPhone(''); }}>
+                Skip (Pay Later)
+              </Button>
+              <Button loading={vendorPayLoading} onClick={handlePayVendor} icon={<DollarSign size={14} />}>
+                Pay {showPayVendorModal ? formatCurrency(showPayVendorModal.amount) : ''}
+              </Button>
+            </>
+          )
+        }
+      >
+        {showPayVendorModal && (
+          <div className="space-y-4">
+            {/* Awaiting PIN */}
+            {vendorAwaitingPin && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                className="flex flex-col items-center gap-3 p-5 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+                <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <div>
+                  <p className="font-bold text-primary-800 dark:text-primary-300">Sending payment...</p>
+                  <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                    {vendorPayMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} prompt sent to <strong>{vendorPhone}</strong>.
+                  </p>
+                  <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                    The vendor must accept <strong>{formatCurrency(showPayVendorModal.amount)}</strong> on their phone.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-2">ref: {vendorPayRef}</p>
+                </div>
+              </motion.div>
+            )}
+
+            {!vendorAwaitingPin && (
+              <>
+                {/* Summary */}
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-xl p-4">
+                  <div className="flex items-center gap-3">
+                    <Avatar name={showPayVendorModal.vendorName} size="md" />
+                    <div>
+                      <p className="font-bold text-slate-900 dark:text-slate-100">{showPayVendorModal.vendorName}</p>
+                      <p className="text-xs text-slate-500">{showPayVendorModal.description}</p>
+                    </div>
+                  </div>
+                  <p className="text-2xl font-bold text-green-600 mt-3">{formatCurrency(showPayVendorModal.amount)}</p>
+                  <p className="text-xs text-slate-400">Job payment · {showPayVendorModal.propertyTitle}</p>
+                </div>
+
+                {/* Method */}
+                <div>
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Send via</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: 'mtn_momo' as const,    label: 'MTN MoMo',    color: 'bg-yellow-400' },
+                      { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500' },
+                    ].map(m => (
+                      <button key={m.value} onClick={() => setVendorPayMethod(m.value)}
+                        className={`p-3 rounded-xl border-2 text-center transition-all ${vendorPayMethod === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
+                        <div className={`w-7 h-7 ${m.color} rounded-full mx-auto mb-1`} />
+                        <p className="text-xs font-medium text-slate-700 dark:text-slate-300">{m.label}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <Input
+                  label="Vendor's Phone Number"
+                  type="tel"
+                  placeholder="07XX XXX XXX"
+                  value={vendorPhone}
+                  onChange={e => setVendorPhone(e.target.value)}
+                  icon={<Smartphone size={15} />}
+                  hint="The vendor will receive a mobile money credit on this number"
+                />
+
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 text-xs text-blue-700 dark:text-blue-400">
+                  💡 The vendor's phone number is pre-filled from their profile if available. Payment goes directly to their mobile money wallet.
+                </div>
+              </>
+            )}
           </div>
         )}
       </Modal>

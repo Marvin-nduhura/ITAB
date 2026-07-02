@@ -388,6 +388,7 @@ describe('POST /api/payments/rent', () => {
 describe('POST /api/inspections/:id/pay', () => {
   test('tenant can pay inspection fee', async () => {
     mockAuthUser('tenant', 'tenant-001', 'approved', 'POST');
+    // UPDATE inspections
     mockQuery.mockResolvedValueOnce({
       rows: [{
         id: 'insp-001', property_id: 'prop-01', property_title: 'Kololo Apt',
@@ -399,11 +400,13 @@ describe('POST /api/inspections/:id/pay', () => {
         created_at: new Date().toISOString(),
       }],
     });
+    // INSERT payments (non-fatal fire-and-forget)
+    mockQuery.mockResolvedValue({ rows: [] });
 
     const res = await request(app)
       .post('/api/inspections/insp-001/pay')
       .set('Authorization', `Bearer ${makeToken('tenant', 'tenant-001')}`)
-      .send({ method: 'airtel_money', reference: 'AIR-INSP-001' });
+      .send({ method: 'airtel_money', reference: 'AIR-INSP-001', status: 'completed' });
 
     expect(res.status).toBe(200);
     expect(res.body.data.feePaid).toBe(true);

@@ -65,6 +65,9 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
   const [payMode, setPayMode] = useState<'full' | 'partial' | 'advance'>('full');
   const [advanceMonths, setAdvanceMonths] = useState(2);
   const [loading, setLoading] = useState(false);
+  const [awaitingPin, setAwaitingPin] = useState(false);
+  const [payRef, setPayRef] = useState('');
+  const [pinTimeout, setPinTimeout] = useState(false);
 
   if (!balance) return null;
 
@@ -101,35 +104,71 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
 
   const handlePay = async () => {
     if (!isValid) { toast.error('Enter a valid amount'); return; }
-    if (payMethod !== 'cash' && !phone) { toast.error('Enter your phone number'); return; }
+    if ((payMethod === 'mtn_momo' || payMethod === 'airtel_money') && !phone) {
+      toast.error('Enter your phone number to receive the PIN prompt'); return;
+    }
     setLoading(true);
     try {
       const { paymentsApi } = await import('../lib/api');
-      // Initiate mobile money payment
+      const ref = `${payMethod === 'mtn_momo' ? 'MTN' : payMethod === 'airtel_money' ? 'AIR' : 'CARD'}-${Date.now()}`;
+
       if (payMethod === 'mtn_momo') {
-        await paymentsApi.initMTN({ amount: amountToPay, phone, type: 'rent', propertyId: balance.propertyId });
+        await paymentsApi.initMTN({ amount: amountToPay, phone, type: 'rent', propertyId: balance.propertyId, reference: ref });
       } else if (payMethod === 'airtel_money') {
-        await paymentsApi.initAirtel({ amount: amountToPay, phone, type: 'rent', propertyId: balance.propertyId });
+        await paymentsApi.initAirtel({ amount: amountToPay, phone, type: 'rent', propertyId: balance.propertyId, reference: ref });
       }
-      // Record the payment
-      await paymentsApi.payRent({
-        propertyId: balance.propertyId,
-        propertyTitle: balance.propertyTitle,
-        amount: amountToPay,
-        method: payMethod,
-        reference: `${payMethod.toUpperCase()}-${Date.now()}`,
-        rentPeriod: balance.rentPeriod,
-        isPartial: isPartialPayment,
-      });
-    } catch { /* offline — will sync */ }
-    setLoading(false);
-    onClose();
-    if (payMode === 'advance') {
-      toast.success(`🎉 ${advanceMonths} months paid in advance! ${advanceDiscount > 0 ? `You saved ${formatCurrency(advanceSaving)}!` : ''}`);
-    } else if (isPartialPayment) {
-      toast.success(`✅ Partial payment of ${formatCurrency(amountToPay)} received! Remaining: ${formatCurrency(remaining - amountToPay)}`);
-    } else {
-      toast.success(`🎉 Rent fully paid for ${balance.rentPeriod}!`);
+
+      if (payMethod === 'mtn_momo' || payMethod === 'airtel_money') {
+        // Record payment as pending — callback will update to completed
+        await paymentsApi.payRent({
+          propertyId: balance.propertyId,
+          propertyTitle: balance.propertyTitle,
+          amount: amountToPay,
+          method: payMethod,
+          reference: ref,
+          rentPeriod: balance.rentPeriod,
+          isPartial: isPartialPayment,
+          status: 'pending',
+        });
+        setLoading(false);
+        setPayRef(ref);
+        setAwaitingPin(true);
+        setPinTimeout(false);
+
+        // Poll for payment confirmation from mobile money callback
+        const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+        setAwaitingPin(false);
+        if (result.status === 'completed') {
+          onClose();
+          if (payMode === 'advance') {
+            toast.success(`🎉 ${advanceMonths} months paid in advance!${advanceDiscount > 0 ? ` You saved ${formatCurrency(advanceSaving)}!` : ''}`);
+          } else if (isPartialPayment) {
+            toast.success(`✅ Partial payment of ${formatCurrency(amountToPay)} confirmed! Remaining: ${formatCurrency(remaining - amountToPay)}`);
+          } else {
+            toast.success(`🎉 Rent fully paid for ${balance.rentPeriod}!`);
+          }
+        } else {
+          setPinTimeout(true);
+          toast.error('Payment not confirmed yet. Check your phone and try again if needed.');
+        }
+      } else {
+        // Card — record as completed directly
+        await paymentsApi.payRent({
+          propertyId: balance.propertyId,
+          propertyTitle: balance.propertyTitle,
+          amount: amountToPay,
+          method: payMethod,
+          reference: ref,
+          rentPeriod: balance.rentPeriod,
+          isPartial: isPartialPayment,
+        });
+        setLoading(false);
+        onClose();
+        toast.success(`🎉 Payment of ${formatCurrency(amountToPay)} processed!`);
+      }
+    } catch {
+      setLoading(false);
+      toast.error('Payment failed. Please check your connection and try again.');
     }
   };
 
@@ -138,27 +177,70 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
     : '';
 
   return (
-    <Modal open={open} onClose={onClose} title="Pay Rent" size="md"
+    <Modal open={open} onClose={awaitingPin ? undefined : onClose} title="Pay Rent" size="md"
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button
-            loading={loading}
-            onClick={handlePay}
-            disabled={!isValid}
-            variant={payMode === 'advance' ? 'gold' : isPartialPayment ? 'secondary' : 'gold'}
-            icon={<Banknote size={15} />}
-          >
-            {payMode === 'advance'
-              ? `Pay ${formatCurrency(advanceTotal)} (${advanceMonths} months)`
-              : isPartialPayment
-                ? `Pay ${formatCurrency(amountToPay)} (Partial)`
-                : `Pay ${formatCurrency(amountToPay)} (Full)`}
-          </Button>
-        </>
+        awaitingPin ? (
+          <div className="w-full flex flex-col items-center gap-2 py-2">
+            <div className="flex items-center gap-3">
+              <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for your PIN confirmation...</span>
+            </div>
+            {pinTimeout && (
+              <Button size="sm" variant="secondary" onClick={() => { setAwaitingPin(false); setPinTimeout(false); }}>
+                Try Again
+              </Button>
+            )}
+          </div>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose}>Cancel</Button>
+            <Button
+              loading={loading}
+              onClick={handlePay}
+              disabled={!isValid}
+              variant={payMode === 'advance' ? 'gold' : isPartialPayment ? 'secondary' : 'gold'}
+              icon={<Banknote size={15} />}
+            >
+              {payMode === 'advance'
+                ? `Pay ${formatCurrency(advanceTotal)} (${advanceMonths} months)`
+                : isPartialPayment
+                  ? `Pay ${formatCurrency(amountToPay)} (Partial)`
+                  : `Pay ${formatCurrency(amountToPay)} (Full)`}
+            </Button>
+          </>
+        )
       }
     >
       <div className="space-y-5">
+        {/* Awaiting PIN confirmation */}
+        {awaitingPin && (
+          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col items-center gap-3 p-5 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+            <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            <div>
+              <p className="font-bold text-primary-800 dark:text-primary-300">Check your phone!</p>
+              <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                A {payMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} USSD prompt has been sent to <strong>{phone}</strong>.
+              </p>
+              <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                Enter your mobile money PIN to confirm the payment of <strong>{formatCurrency(amountToPay)}</strong>.
+              </p>
+              <p className="text-xs text-primary-400 mt-2">Waiting for confirmation · ref: {payRef}</p>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Payment timed out notice */}
+        {pinTimeout && !awaitingPin && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+            className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl text-xs text-amber-700 dark:text-amber-400 text-center">
+            ⏱ Payment not confirmed within 60 seconds. Please try again or check your balance.
+          </motion.div>
+        )}
+
+        {/* Property & period — hidden while awaiting PIN */}
+        {!awaitingPin && (
+        <div className="space-y-5">
         {/* Property & period */}
         <div className="bg-slate-50 dark:bg-slate-700/50 rounded-2xl p-4 space-y-3">
           <div>
@@ -334,6 +416,8 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
             <div className="flex justify-between text-red-500"><span>Still owed after</span><span>{formatCurrency(remaining - amountToPay)}</span></div>
           )}
         </div>
+      </div>
+      )} {/* end !awaitingPin */}
       </div>
     </Modal>
   );
