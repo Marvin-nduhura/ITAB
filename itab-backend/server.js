@@ -1977,8 +1977,28 @@ app.post('/api/payments/mtn/initiate', auth, requireAnyPerm([
       return res.status(502).json({ message: `MTN payment failed: ${mtnResp.status}` });
     }
 
-    // ── Sandbox / no credentials: return simulated pending ────────────────
+    // ── Sandbox / no credentials: simulate callback after 5s ─────────────
     console.log(`[MTN SANDBOX] Simulated USSD prompt to ${phone} ref=${reference}`);
+
+    // Auto-fire the callback after 5 seconds to simulate user entering PIN
+    setTimeout(async () => {
+      try {
+        await pool.query(
+          `UPDATE payments SET status='completed', paid_at=NOW() WHERE reference=$1`,
+          [reference]
+        );
+        await pool.query(
+          `UPDATE transactions SET status='completed', processed_at=NOW() WHERE reference=$1`,
+          [reference]
+        );
+        await pool.query(
+          `UPDATE inspections SET fee_paid=true, updated_at=NOW() WHERE payment_ref=$1`,
+          [reference]
+        );
+        console.log(`[MTN SANDBOX] Auto-confirmed payment ref=${reference}`);
+      } catch (e) { /* non-fatal */ }
+    }, 5000);
+
     res.json({ data: { reference, status: 'pending', message: `MTN MoMo PIN prompt sent to ${phone}. Enter your PIN to complete payment.` } });
 
   } catch (err) {
@@ -2081,7 +2101,7 @@ app.post('/api/payments/airtel/initiate', auth, requireAnyPerm([
       return res.status(502).json({ message: `Airtel payment failed: ${airtelData?.status?.message || airtelResp.status}` });
     }
 
-    // ── Sandbox / no credentials: return simulated pending ────────────────
+    // ── Sandbox / no credentials: simulate callback after 5s ─────────────
     if (amount) {
       pool.query(
         `INSERT INTO payments (id, type, amount, currency, status, method, reference, created_at)
@@ -2092,6 +2112,26 @@ app.post('/api/payments/airtel/initiate', auth, requireAnyPerm([
     }
 
     console.log(`[Airtel SANDBOX] Simulated PIN prompt to ${phone} ref=${reference}`);
+
+    // Auto-fire the callback after 5 seconds to simulate user entering PIN
+    setTimeout(async () => {
+      try {
+        await pool.query(
+          `UPDATE payments SET status='completed', paid_at=NOW() WHERE reference=$1`,
+          [reference]
+        );
+        await pool.query(
+          `UPDATE transactions SET status='completed', processed_at=NOW() WHERE reference=$1`,
+          [reference]
+        );
+        await pool.query(
+          `UPDATE inspections SET fee_paid=true, updated_at=NOW() WHERE payment_ref=$1`,
+          [reference]
+        );
+        console.log(`[Airtel SANDBOX] Auto-confirmed payment ref=${reference}`);
+      } catch (e) { /* non-fatal */ }
+    }, 5000);
+
     res.json({ data: { reference, status: 'pending', message: `Airtel Money PIN prompt sent to ${phone}. Enter your PIN to complete payment.` } });
 
   } catch (err) {

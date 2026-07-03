@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { FileText, Plus, Play, Pause, X, DollarSign, CheckCircle2, RefreshCw } from 'lucide-react';
+import { FileText, Plus, Play, Pause, X, DollarSign, CheckCircle2, RefreshCw, Smartphone } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -12,6 +12,7 @@ import { useAuthStore } from '../store/authStore';
 import { useVendorStore } from '../store/vendorStore';
 import { usePaymentStore } from '../store/paymentStore';
 import { usePropertyStore } from '../store/propertyStore';
+import { paymentsApi } from '../lib/api';
 import { formatCurrency, formatDate } from '../lib/utils';
 import type { ContractType } from '../types';
 import toast from 'react-hot-toast';
@@ -36,6 +37,12 @@ export function VendorContractsPage() {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [payingId, setPayingId] = useState<string | null>(null);
+  // Contract payment PIN flow state
+  const [showPayModal, setShowPayModal] = useState<{ contractId: string; vendorName: string; amount: number; method: string } | null>(null);
+  const [payPhone, setPayPhone] = useState('');
+  const [payAwaitingPin, setPayAwaitingPin] = useState(false);
+  const [payRef, setPayRef] = useState('');
+  const [payTimedOut, setPayTimedOut] = useState(false);
   const [form, setForm] = useState({
     vendorId: '',
     propertyId: '',
@@ -98,11 +105,71 @@ export function VendorContractsPage() {
   };
 
   const handleProcessPayment = async (contractId: string) => {
+    const contract = contracts.find(c => c.id === contractId);
+    if (!contract) return;
+
+    // Cash or bank — record immediately
+    if (contract.paymentMethod === 'cash' || contract.paymentMethod === 'bank') {
+      setPayingId(contractId);
+      const tx = processContractPayment(contractId);
+      setPayingId(null);
+      if (tx) {
+        toast.success(`✅ ${contract.paymentMethod === 'cash' ? 'Cash' : 'Bank'} payment of ${formatCurrency(tx.amount)} recorded for ${tx.receiverName}!`);
+      }
+      return;
+    }
+
+    // MTN / Airtel — open PIN flow modal
+    const vendor = vendors.find(v => v.id === contract.vendorId);
+    setPayPhone(vendor?.phone || '');
+    setShowPayModal({
+      contractId,
+      vendorName: contract.vendorName,
+      amount: contract.amount,
+      method: contract.paymentMethod,
+    });
+  };
+
+  const handleContractPayPin = async () => {
+    if (!showPayModal) return;
+    if (!payPhone.trim()) { toast.error('Enter the vendor phone number'); return; }
+
+    const { contractId, amount, vendorName, method } = showPayModal;
+    const ref = `${method === 'mtn_momo' ? 'MTN' : 'AIR'}-CTR-${Date.now()}`;
+
     setPayingId(contractId);
-    const tx = processContractPayment(contractId);
-    setPayingId(null);
-    if (tx) {
-      toast.success(`Payment of ${formatCurrency(tx.amount)} sent to ${tx.receiverName} via ${tx.receiverMethod.replace('_', ' ')}!`);
+    try {
+      // Initiate USSD push to vendor's phone
+      if (method === 'mtn_momo') {
+        await paymentsApi.initMTN({ amount, phone: payPhone, type: 'contract_payment', reference: ref });
+      } else {
+        await paymentsApi.initAirtel({ amount, phone: payPhone, type: 'contract_payment', reference: ref });
+      }
+
+      setPayRef(ref);
+      setPayAwaitingPin(true);
+      setPayTimedOut(false);
+
+      // Poll — only show success after callback fires
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+      setPayAwaitingPin(false);
+      setPayingId(null);
+
+      if (result.status === 'completed') {
+        const tx = processContractPayment(contractId);
+        setShowPayModal(null);
+        setPayPhone('');
+        if (tx) {
+          toast.success(`✅ ${formatCurrency(amount)} confirmed and sent to ${vendorName}!`);
+        }
+      } else {
+        setPayTimedOut(true);
+        toast.error('Payment not confirmed. The vendor should check their phone.');
+      }
+    } catch {
+      setPayingId(null);
+      setPayAwaitingPin(false);
+      toast.error('Payment failed. Check your connection and try again.');
     }
   };
 
@@ -278,6 +345,77 @@ export function VendorContractsPage() {
             <Input label="End Date (optional)" type="date" value={form.endDate} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} hint="Leave blank for open-ended" />
           </div>
         </div>
+      </Modal>
+
+      {/* ── Contract Payment PIN Modal ────────────────────────────────── */}
+      <Modal
+        open={!!showPayModal}
+        onClose={payAwaitingPin ? undefined : () => { setShowPayModal(null); setPayPhone(''); setPayAwaitingPin(false); setPayTimedOut(false); }}
+        title="Process Contract Payment"
+        size="sm"
+        footer={
+          payAwaitingPin ? (
+            <div className="w-full flex flex-col items-center gap-2 py-1">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for PIN confirmation...</span>
+              </div>
+              {payTimedOut && (
+                <Button size="sm" variant="secondary" onClick={() => { setPayAwaitingPin(false); setPayTimedOut(false); }}>
+                  Try Again
+                </Button>
+              )}
+            </div>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => { setShowPayModal(null); setPayPhone(''); }}>Cancel</Button>
+              <Button loading={!!payingId} onClick={handleContractPayPin} icon={<Smartphone size={14} />}>
+                Send {showPayModal ? formatCurrency(showPayModal.amount) : ''}
+              </Button>
+            </>
+          )
+        }
+      >
+        {showPayModal && (
+          <div className="space-y-4">
+            {payAwaitingPin ? (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                className="flex flex-col items-center gap-3 p-5 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+                <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <div>
+                  <p className="font-bold text-primary-800 dark:text-primary-300">Check your phone!</p>
+                  <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                    A {showPayModal.method === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} prompt was sent to <strong>{payPhone}</strong>.
+                  </p>
+                  <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                    Enter your PIN to send <strong>{formatCurrency(showPayModal.amount)}</strong> to {showPayModal.vendorName}.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-2">ref: {payRef}</p>
+                </div>
+              </motion.div>
+            ) : (
+              <>
+                <div className="bg-slate-50 dark:bg-slate-700/50 rounded-xl p-4 space-y-1">
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">{showPayModal.vendorName}</p>
+                  <p className="text-2xl font-bold text-green-600">{formatCurrency(showPayModal.amount)}</p>
+                  <p className="text-xs text-slate-400 capitalize">via {showPayModal.method.replace('_', ' ')}</p>
+                </div>
+                <Input
+                  label="Vendor Phone Number"
+                  type="tel"
+                  placeholder="07XX XXX XXX"
+                  value={payPhone}
+                  onChange={e => setPayPhone(e.target.value)}
+                  icon={<Smartphone size={15} />}
+                  hint="USSD prompt will be sent to this number — vendor enters PIN to receive"
+                />
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-xs text-amber-700 dark:text-amber-400">
+                  ⚠️ Payment will only be confirmed after the vendor enters their mobile money PIN. Do not close this window.
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );
