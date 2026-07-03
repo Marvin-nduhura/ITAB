@@ -628,7 +628,7 @@ export function TenantPortal() {
       {/* ── Pay Rent Modal ────────────────────────────────────────────── */}
       <Modal
         open={showPayModal}
-        onClose={awaitingPin ? undefined : () => { setShowPayModal(false); setAwaitingPin(false); setPayTimedOut(false); }}
+        onClose={awaitingPin ? () => {} : () => { setShowPayModal(false); setAwaitingPin(false); setPayTimedOut(false); }}
         title={`Pay Rent — ${periodLabel}`}
         size="sm"
         footer={

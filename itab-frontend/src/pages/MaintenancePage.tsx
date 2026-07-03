@@ -570,7 +570,7 @@ export function MaintenancePage() {
       {/* ── Pay Vendor Modal ──────────────────────────────────────────── */}
       <Modal
         open={!!showPayVendorModal}
-        onClose={vendorAwaitingPin ? undefined : () => { setShowPayVendorModal(null); setVendorPhone(''); setVendorAwaitingPin(false); }}
+        onClose={vendorAwaitingPin ? () => {} : () => { setShowPayVendorModal(null); setVendorPhone(''); setVendorAwaitingPin(false); }}
         title="Pay Vendor"
         size="sm"
         footer={

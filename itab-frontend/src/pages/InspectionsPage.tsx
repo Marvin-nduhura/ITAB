@@ -96,7 +96,7 @@ function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFee
   return (
     <Modal
       open={open}
-      onClose={awaitingPin ? undefined : onClose}
+      onClose={awaitingPin ? () => {} : onClose}
       title="Pay Inspection Fee"
       size="sm"
       footer={

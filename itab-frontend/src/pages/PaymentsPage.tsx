@@ -234,7 +234,7 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
     : '';
 
   return (
-    <Modal open={open} onClose={awaitingPin ? undefined : onClose} title="Pay Rent" size="md"
+    <Modal open={open} onClose={awaitingPin ? () => {} : onClose} title="Pay Rent" size="md"
       footer={
         awaitingPin ? (
           <div className="w-full flex flex-col items-center gap-2 py-2">

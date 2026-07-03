@@ -199,10 +199,10 @@ export function MessagesPage() {
       const conv = (res.data as { data: Conversation }).data;
 
       // Upsert: if conversation already exists (dedup), just switch to it
-      setConversations(prev => {
-        const exists = prev.find(c => c.id === conv.id);
-        return exists ? prev : [conv, ...prev];
-      });
+      const exists = conversations.find(c => c.id === conv.id);
+      if (!exists) {
+        setConversations([conv, ...conversations]);
+      }
       setActiveConvId(conv.id);
       resetModal();
       toast.success(`Conversation started with ${selectedUsers.map(u => u.firstName).join(', ')}`);

@@ -350,7 +350,7 @@ export function VendorContractsPage() {
       {/* ── Contract Payment PIN Modal ────────────────────────────────── */}
       <Modal
         open={!!showPayModal}
-        onClose={payAwaitingPin ? undefined : () => { setShowPayModal(null); setPayPhone(''); setPayAwaitingPin(false); setPayTimedOut(false); }}
+        onClose={payAwaitingPin ? () => {} : () => { setShowPayModal(null); setPayPhone(''); setPayAwaitingPin(false); setPayTimedOut(false); }}
         title="Process Contract Payment"
         size="sm"
         footer={

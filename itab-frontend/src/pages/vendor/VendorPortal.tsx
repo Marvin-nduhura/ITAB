@@ -478,7 +478,7 @@ export function VendorPortal() {
       {/* Receive Payment Modal */}
       <Modal
         open={!!showRequestPayModal}
-        onClose={awaitingPayment ? undefined : () => { setShowRequestPayModal(null); setMyPhone(''); setAwaitingPayment(false); }}
+        onClose={awaitingPayment ? () => {} : () => { setShowRequestPayModal(null); setMyPhone(''); setAwaitingPayment(false); }}
         title="Receive Payment"
         size="sm"
         footer={
