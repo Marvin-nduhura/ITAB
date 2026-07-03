@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { ApiResponse, PropertyLocationConflict } from '../types';
+import type { ApiResponse, PropertyLocationConflict, PropertyUnit } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
@@ -62,8 +62,16 @@ export const propertiesApi = {
   uploadPhotos: (id: string, files: FormData) => api.post(`/properties/${id}/photos`, files, { headers: { 'Content-Type': 'multipart/form-data' } }),
 };
 
-export const propertyConflictsApi = {
-  list: (status?: string) =>
+// ─── Property Units ───────────────────────────────────────────────────────────
+export const propertyUnitsApi = {
+  list:       (propertyId: string) => api.get<ApiResponse<PropertyUnit[]>>(`/properties/${propertyId}/units`),
+  create:     (propertyId: string, data: unknown) => api.post<ApiResponse<PropertyUnit>>(`/properties/${propertyId}/units`, data),
+  update:     (propertyId: string, unitId: string, data: unknown) => api.put<ApiResponse<PropertyUnit>>(`/properties/${propertyId}/units/${unitId}`, data),
+  delete:     (propertyId: string, unitId: string) => api.delete(`/properties/${propertyId}/units/${unitId}`),
+  markRented: (propertyId: string, unitId: string, data: unknown) => api.patch<ApiResponse<PropertyUnit>>(`/properties/${propertyId}/units/${unitId}/rent`, data),
+};
+
+export const propertyConflictsApi = {  list: (status?: string) =>
     api.get<ApiResponse<PropertyLocationConflict[]>>('/property-conflicts', { params: status ? { status } : {} }),
   resolve: (id: string, data: { status: 'confirmed_duplicate' | 'not_duplicate'; adminNotes?: string }) =>
     api.patch<ApiResponse<PropertyLocationConflict>>(`/property-conflicts/${id}`, data),

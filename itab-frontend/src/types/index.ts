@@ -71,6 +71,36 @@ export interface Property {
   leaseStart?: string;
   leaseEnd?: string;
   viewCount: number;
+  hasUnits?: boolean;           // true when apartment/commercial has individual units
+  wholeBuildingRent?: number;   // manual override for whole-building rent
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Property Unit (apartment / commercial unit) ──────────────────────────────
+export type UnitStatus = 'available' | 'rented' | 'under_maintenance';
+
+export interface PropertyUnit {
+  id: string;
+  propertyId: string;
+  unitName: string;           // "Unit A", "Floor 2", "Shop 3"
+  description?: string;
+  floorNumber?: number;
+  bedrooms: number;
+  bathrooms: number;
+  squareFootage?: number;
+  rentPrice: number;
+  deposit?: number;
+  photos: string[];
+  amenities: string[];        // own amenities per unit
+  status: UnitStatus;
+  tenantId?: string;
+  tenantName?: string;
+  leaseStart?: string;
+  leaseEnd?: string;
+  availableFrom?: string;
+  isFeatured: boolean;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
 }

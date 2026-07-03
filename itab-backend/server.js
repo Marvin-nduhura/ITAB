@@ -428,6 +428,8 @@ function formatProperty(p) {
     leaseStart: p.lease_start,
     leaseEnd: p.lease_end,
     viewCount: p.view_count || 0,
+    hasUnits: p.has_units || false,
+    wholeBuildingRent: p.whole_building_rent || null,
     createdById,
     createdByName,
     createdByRole: p.created_by_role || null,
@@ -2457,6 +2459,201 @@ app.patch('/api/transactions/:id/refund', auth, requireRole('admin'), requirePer
     );
     res.json({ data: formatTransaction(result.rows[0]) });
   } catch (err) {
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PROPERTY UNITS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function formatUnit(u) {
+  if (!u) return null;
+  return {
+    id:            u.id,
+    propertyId:    u.property_id,
+    unitName:      u.unit_name,
+    description:   u.description,
+    floorNumber:   u.floor_number,
+    bedrooms:      u.bedrooms,
+    bathrooms:     u.bathrooms,
+    squareFootage: u.square_footage,
+    rentPrice:     u.rent_price,
+    deposit:       u.deposit,
+    photos:        u.photos || [],
+    amenities:     u.amenities || [],
+    status:        u.status,
+    tenantId:      u.tenant_id,
+    tenantName:    u.tenant_name,
+    leaseStart:    u.lease_start,
+    leaseEnd:      u.lease_end,
+    availableFrom: u.available_from,
+    isFeatured:    u.is_featured,
+    sortOrder:     u.sort_order,
+    createdAt:     u.created_at,
+    updatedAt:     u.updated_at,
+  };
+}
+
+// GET /api/properties/:id/units — list all units (public for published properties)
+app.get('/api/properties/:id/units', optionalAuth, async (req, res) => {
+  try {
+    const propRes = await pool.query('SELECT * FROM properties WHERE id=$1', [req.params.id]);
+    if (!propRes.rows.length) return res.status(404).json({ message: 'Property not found' });
+    if (!canUserViewProperty(req.user, propRes.rows[0])) {
+      return res.status(404).json({ message: 'Property not found' });
+    }
+    const result = await pool.query(
+      'SELECT * FROM property_units WHERE property_id=$1 ORDER BY sort_order ASC, unit_name ASC',
+      [req.params.id]
+    );
+    res.json({ data: result.rows.map(formatUnit) });
+  } catch (err) {
+    console.error('get units:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// POST /api/properties/:id/units — create a unit
+app.post('/api/properties/:id/units', auth, requirePerm('properties', 'editProperty'), async (req, res) => {
+  try {
+    const propRes = await pool.query('SELECT * FROM properties WHERE id=$1', [req.params.id]);
+    if (!propRes.rows.length) return res.status(404).json({ message: 'Property not found' });
+    if (!canUserViewProperty(req.user, propRes.rows[0])) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    const {
+      unitName, description, floorNumber, bedrooms, bathrooms, squareFootage,
+      rentPrice, deposit, photos, amenities, availableFrom, isFeatured, sortOrder,
+    } = req.body;
+
+    if (!unitName || !rentPrice) {
+      return res.status(400).json({ message: 'unitName and rentPrice are required' });
+    }
+
+    const id = uuidv4();
+    const result = await pool.query(
+      `INSERT INTO property_units
+         (id, property_id, unit_name, description, floor_number, bedrooms, bathrooms,
+          square_footage, rent_price, deposit, photos, amenities, available_from,
+          is_featured, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+      [
+        id, req.params.id, unitName, description || null, floorNumber || null,
+        bedrooms || 0, bathrooms || 0, squareFootage || null,
+        rentPrice, deposit || null,
+        JSON.stringify(photos || []),
+        JSON.stringify(amenities || []),
+        availableFrom || null, isFeatured || false, sortOrder || 0,
+      ]
+    );
+
+    // Mark property as having units, and recalculate total rent from units
+    await pool.query(
+      `UPDATE properties SET has_units=true, updated_at=NOW() WHERE id=$1`,
+      [req.params.id]
+    );
+
+    res.status(201).json({ data: formatUnit(result.rows[0]) });
+  } catch (err) {
+    console.error('create unit:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// PUT /api/properties/:id/units/:unitId — update a unit
+app.put('/api/properties/:id/units/:unitId', auth, requirePerm('properties', 'editProperty'), async (req, res) => {
+  try {
+    const unitRes = await pool.query(
+      'SELECT * FROM property_units WHERE id=$1 AND property_id=$2',
+      [req.params.unitId, req.params.id]
+    );
+    if (!unitRes.rows.length) return res.status(404).json({ message: 'Unit not found' });
+
+    const {
+      unitName, description, floorNumber, bedrooms, bathrooms, squareFootage,
+      rentPrice, deposit, photos, amenities, status, tenantId, tenantName,
+      leaseStart, leaseEnd, availableFrom, isFeatured, sortOrder,
+    } = req.body;
+
+    const result = await pool.query(
+      `UPDATE property_units SET
+         unit_name      = COALESCE($1, unit_name),
+         description    = COALESCE($2, description),
+         floor_number   = COALESCE($3, floor_number),
+         bedrooms       = COALESCE($4, bedrooms),
+         bathrooms      = COALESCE($5, bathrooms),
+         square_footage = COALESCE($6, square_footage),
+         rent_price     = COALESCE($7, rent_price),
+         deposit        = COALESCE($8, deposit),
+         photos         = COALESCE($9, photos),
+         amenities      = COALESCE($10, amenities),
+         status         = COALESCE($11, status),
+         tenant_id      = COALESCE($12, tenant_id),
+         tenant_name    = COALESCE($13, tenant_name),
+         lease_start    = COALESCE($14, lease_start),
+         lease_end      = COALESCE($15, lease_end),
+         available_from = COALESCE($16, available_from),
+         is_featured    = COALESCE($17, is_featured),
+         sort_order     = COALESCE($18, sort_order),
+         updated_at     = NOW()
+       WHERE id=$19 RETURNING *`,
+      [
+        unitName, description, floorNumber, bedrooms, bathrooms, squareFootage,
+        rentPrice, deposit,
+        photos     ? JSON.stringify(photos)     : null,
+        amenities  ? JSON.stringify(amenities)  : null,
+        status, tenantId, tenantName, leaseStart, leaseEnd, availableFrom,
+        isFeatured, sortOrder,
+        req.params.unitId,
+      ]
+    );
+
+    await pool.query('UPDATE properties SET updated_at=NOW() WHERE id=$1', [req.params.id]);
+    res.json({ data: formatUnit(result.rows[0]) });
+  } catch (err) {
+    console.error('update unit:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// DELETE /api/properties/:id/units/:unitId
+app.delete('/api/properties/:id/units/:unitId', auth, requirePerm('properties', 'editProperty'), async (req, res) => {
+  try {
+    await pool.query(
+      'DELETE FROM property_units WHERE id=$1 AND property_id=$2',
+      [req.params.unitId, req.params.id]
+    );
+    // Check if any units remain; if not, unset has_units
+    const remaining = await pool.query(
+      'SELECT COUNT(*) FROM property_units WHERE property_id=$1', [req.params.id]
+    );
+    if (parseInt(remaining.rows[0].count) === 0) {
+      await pool.query('UPDATE properties SET has_units=false WHERE id=$1', [req.params.id]);
+    }
+    res.json({ data: { deleted: true } });
+  } catch (err) {
+    console.error('delete unit:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// PATCH /api/properties/:id/units/:unitId/rent — mark unit as rented to a tenant
+app.patch('/api/properties/:id/units/:unitId/rent', auth, requirePerm('properties', 'editProperty'), async (req, res) => {
+  try {
+    const { tenantId, tenantName, leaseStart, leaseEnd } = req.body;
+    const result = await pool.query(
+      `UPDATE property_units
+         SET status='rented', tenant_id=$1, tenant_name=$2,
+             lease_start=$3, lease_end=$4, updated_at=NOW()
+       WHERE id=$5 AND property_id=$6 RETURNING *`,
+      [tenantId, tenantName, leaseStart, leaseEnd, req.params.unitId, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ message: 'Unit not found' });
+    res.json({ data: formatUnit(result.rows[0]) });
+  } catch (err) {
+    console.error('rent unit:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

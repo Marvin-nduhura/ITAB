@@ -479,3 +479,32 @@ CREATE INDEX IF NOT EXISTS idx_notices_tenant ON tenant_notices(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_disputes_raised_by ON disputes(raised_by_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_vendor_jobs_vendor ON vendor_jobs(vendor_id);
+
+-- Property Units (for apartments and commercial buildings with multiple rentable units)
+CREATE TABLE IF NOT EXISTS property_units (
+  id                TEXT PRIMARY KEY,
+  property_id       TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  unit_name         TEXT NOT NULL,            -- e.g. "Unit A", "Floor 2", "Shop 3"
+  description       TEXT,
+  floor_number      INTEGER,
+  bedrooms          INTEGER DEFAULT 0,
+  bathrooms         INTEGER DEFAULT 0,
+  square_footage    INTEGER,
+  rent_price        BIGINT NOT NULL,
+  deposit           BIGINT,
+  photos            JSONB DEFAULT '[]',
+  amenities         JSONB DEFAULT '[]',
+  status            TEXT NOT NULL DEFAULT 'available', -- available | rented | under_maintenance
+  tenant_id         TEXT REFERENCES users(id) ON DELETE SET NULL,
+  tenant_name       TEXT,
+  lease_start       DATE,
+  lease_end         DATE,
+  available_from    DATE,
+  is_featured       BOOLEAN DEFAULT false,
+  sort_order        INTEGER DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_property_units_property ON property_units(property_id);
+CREATE INDEX IF NOT EXISTS idx_property_units_tenant   ON property_units(tenant_id);

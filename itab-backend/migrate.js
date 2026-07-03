@@ -353,6 +353,37 @@ async function main() {
   ];
   for (const [sql, label] of indexes) await run(sql, label);
 
+  // ── 9. Property Units ──────────────────────────────────────────────────────
+  console.log('🏢 Creating property_units table...');
+  await run(`CREATE TABLE IF NOT EXISTS property_units (
+    id                TEXT PRIMARY KEY,
+    property_id       TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    unit_name         TEXT NOT NULL,
+    description       TEXT,
+    floor_number      INTEGER,
+    bedrooms          INTEGER DEFAULT 0,
+    bathrooms         INTEGER DEFAULT 0,
+    square_footage    INTEGER,
+    rent_price        BIGINT NOT NULL,
+    deposit           BIGINT,
+    photos            JSONB DEFAULT '[]',
+    amenities         JSONB DEFAULT '[]',
+    status            TEXT NOT NULL DEFAULT 'available',
+    tenant_id         TEXT REFERENCES users(id) ON DELETE SET NULL,
+    tenant_name       TEXT,
+    lease_start       DATE,
+    lease_end         DATE,
+    available_from    DATE,
+    is_featured       BOOLEAN DEFAULT false,
+    sort_order        INTEGER DEFAULT 0,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`, 'property_units table');
+  await run(`CREATE INDEX IF NOT EXISTS idx_property_units_property ON property_units(property_id)`, 'idx_property_units_property');
+  await run(`CREATE INDEX IF NOT EXISTS idx_property_units_tenant   ON property_units(tenant_id)`,   'idx_property_units_tenant');
+  await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS has_units BOOLEAN DEFAULT false`,          'properties.has_units');
+  await run(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS whole_building_rent BIGINT`,              'properties.whole_building_rent');
+
   console.log('\n═══════════════════════════════════════════════════════');
   console.log('  ✅ Migration complete!');
   console.log('═══════════════════════════════════════════════════════\n');
