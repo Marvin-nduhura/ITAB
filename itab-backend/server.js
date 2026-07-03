@@ -1897,36 +1897,206 @@ app.post('/api/payments/rent', auth, requireRole('tenant'), requireAnyPerm([['pa
   }
 });
 
-app.post('/api/payments/mtn/initiate', auth, requireAnyPerm([['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance'], ['inspections', 'payInspectionFee']]), async (req, res) => {
+// ─── MTN MoMo helpers ─────────────────────────────────────────────────────────
+const MTN_BASE = process.env.MTN_ENVIRONMENT === 'production'
+  ? 'https://proxy.momoapi.mtn.com'
+  : 'https://sandbox.momodeveloper.mtn.com';
+
+/** Get an OAuth2 access token from MTN MoMo */
+async function getMtnToken() {
+  const key    = process.env.MTN_API_USER;
+  const secret = process.env.MTN_API_KEY;
+  const subKey = process.env.MTN_SUBSCRIPTION_KEY;
+  if (!key || !secret || !subKey) return null; // credentials not set yet
+
+  const creds  = Buffer.from(`${key}:${secret}`).toString('base64');
+  const resp   = await fetch(`${MTN_BASE}/collection/token/`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${creds}`,
+      'Ocp-Apim-Subscription-Key': subKey,
+    },
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return data.access_token || null;
+}
+
+app.post('/api/payments/mtn/initiate', auth, requireAnyPerm([
+  ['payments', 'payRentFull'], ['payments', 'payRentPartial'],
+  ['payments', 'payRentAdvance'], ['inspections', 'payInspectionFee'],
+]), async (req, res) => {
   try {
-    const { phone } = req.body;
-    const reference = `MTN-${Date.now()}`;
-    res.json({ data: { reference, status: 'pending', message: `USSD prompt sent to ${phone}` } });
+    const { phone, amount, reference: clientRef } = req.body;
+    const reference  = clientRef || `MTN-${Date.now()}`;
+    const subKey     = process.env.MTN_SUBSCRIPTION_KEY;
+    const mtnEnv     = process.env.MTN_ENVIRONMENT || 'sandbox';
+
+    // ── Real MTN MoMo request-to-pay ──────────────────────────────────────
+    if (subKey && subKey !== 'your_mtn_subscription_key') {
+      const token = await getMtnToken();
+      if (!token) {
+        console.error('[MTN] Could not get access token');
+        return res.status(502).json({ message: 'MTN payment gateway error — check credentials' });
+      }
+
+      // Normalize phone: strip leading 0 and prepend Uganda country code 256
+      const normalizedPhone = phone.replace(/^0/, '256').replace(/\s+/g, '');
+
+      const payload = {
+        amount: String(amount || 0),
+        currency: 'UGX',
+        externalId: reference,
+        payer: { partyIdType: 'MSISDN', partyId: normalizedPhone },
+        payerMessage: 'ITAB Property Payment',
+        payeeNote: `Payment ref: ${reference}`,
+      };
+
+      const mtnResp = await fetch(`${MTN_BASE}/collection/v1_0/requesttopay`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Reference-Id': reference,
+          'X-Target-Environment': mtnEnv,
+          'Ocp-Apim-Subscription-Key': subKey,
+          'Content-Type': 'application/json',
+          // Callback URL — MTN will POST here when transaction completes
+          'X-Callback-Url': 'https://itabproperties.com/api/payments/mtn/callback',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (mtnResp.status === 202) {
+        // 202 Accepted — USSD prompt is being sent to the user's phone
+        console.log(`[MTN] Request-to-pay initiated: ref=${reference} phone=${normalizedPhone}`);
+        return res.json({ data: { reference, status: 'pending', message: `MTN MoMo PIN prompt sent to ${phone}. Enter your PIN to complete payment.` } });
+      }
+
+      const errBody = await mtnResp.text();
+      console.error(`[MTN] Request-to-pay failed: ${mtnResp.status} — ${errBody}`);
+      return res.status(502).json({ message: `MTN payment failed: ${mtnResp.status}` });
+    }
+
+    // ── Sandbox / no credentials: return simulated pending ────────────────
+    console.log(`[MTN SANDBOX] Simulated USSD prompt to ${phone} ref=${reference}`);
+    res.json({ data: { reference, status: 'pending', message: `MTN MoMo PIN prompt sent to ${phone}. Enter your PIN to complete payment.` } });
+
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error('[MTN initiate]', err);
+    res.status(500).json({ message: 'MTN payment gateway error' });
   }
 });
 
-app.post('/api/payments/airtel/initiate', auth, requireAnyPerm([['payments', 'payRentFull'], ['payments', 'payRentPartial'], ['payments', 'payRentAdvance'], ['inspections', 'payInspectionFee']]), async (req, res) => {
+// ─── Airtel Money helpers ─────────────────────────────────────────────────────
+const AIRTEL_BASE = process.env.AIRTEL_ENVIRONMENT === 'production'
+  ? 'https://openapi.airtel.africa'
+  : 'https://openapiuat.airtel.africa';
+
+/** Get an OAuth2 access token from Airtel Africa */
+async function getAirtelToken() {
+  const clientId     = process.env.AIRTEL_CLIENT_ID;
+  const clientSecret = process.env.AIRTEL_CLIENT_SECRET;
+  if (!clientId || clientId === 'your_airtel_client_id') return null;
+
+  const resp = await fetch(`${AIRTEL_BASE}/auth/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'client_credentials',
+    }),
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  return data.access_token || null;
+}
+
+app.post('/api/payments/airtel/initiate', auth, requireAnyPerm([
+  ['payments', 'payRentFull'], ['payments', 'payRentPartial'],
+  ['payments', 'payRentAdvance'], ['inspections', 'payInspectionFee'],
+]), async (req, res) => {
   try {
     const { phone, amount, reference: clientRef } = req.body;
-    const reference = clientRef || `AIR-${Date.now()}`;
+    const reference    = clientRef || `AIR-${Date.now()}`;
+    const clientId     = process.env.AIRTEL_CLIENT_ID;
 
-    // Insert a pending payment record so the callback can update it
-    // (only if amount is provided — otherwise this is a standalone initiation)
-    if (amount) {
-      await pool.query(
-        `INSERT INTO payments (id, type, amount, currency, status, method, reference, created_at)
-         VALUES ($1, 'airtel_initiate', $2, 'UGX', 'pending', 'airtel_money', $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [uuidv4(), amount, reference]
-      ).catch(() => {}); // non-fatal — reference may already exist
+    // ── Real Airtel Money collection ───────────────────────────────────────
+    if (clientId && clientId !== 'your_airtel_client_id') {
+      const token = await getAirtelToken();
+      if (!token) {
+        console.error('[Airtel] Could not get access token');
+        return res.status(502).json({ message: 'Airtel payment gateway error — check credentials' });
+      }
+
+      // Normalize phone: strip leading 0 and prepend 256 (Uganda)
+      const normalizedPhone = phone.replace(/^0/, '256').replace(/\s+/g, '');
+
+      const payload = {
+        reference,
+        subscriber: {
+          country: 'UG',
+          currency: 'UGX',
+          msisdn: normalizedPhone,
+        },
+        transaction: {
+          amount: String(amount || 0),
+          country: 'UG',
+          currency: 'UGX',
+          id: reference,
+        },
+      };
+
+      const airtelResp = await fetch(`${AIRTEL_BASE}/merchant/v1/payments/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Country': 'UG',
+          'X-Currency': 'UGX',
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const airtelData = await airtelResp.json().catch(() => ({}));
+
+      if (airtelResp.ok || airtelResp.status === 200) {
+        console.log(`[Airtel] Payment initiated: ref=${reference} phone=${normalizedPhone}`);
+
+        // Store a pending payment record so callback can update it
+        if (amount) {
+          pool.query(
+            `INSERT INTO payments (id, type, amount, currency, status, method, reference, created_at)
+             VALUES ($1,'airtel_initiate',$2,'UGX','pending','airtel_money',$3,NOW())
+             ON CONFLICT DO NOTHING`,
+            [uuidv4(), amount, reference]
+          ).catch(() => {});
+        }
+
+        return res.json({ data: { reference, status: 'pending', message: `Airtel Money PIN prompt sent to ${phone}. Enter your PIN to complete payment.` } });
+      }
+
+      console.error(`[Airtel] Collection failed: ${airtelResp.status} — ${JSON.stringify(airtelData)}`);
+      return res.status(502).json({ message: `Airtel payment failed: ${airtelData?.status?.message || airtelResp.status}` });
     }
 
-    res.json({ data: { reference, status: 'pending', message: `Payment request sent to ${phone}` } });
+    // ── Sandbox / no credentials: return simulated pending ────────────────
+    if (amount) {
+      pool.query(
+        `INSERT INTO payments (id, type, amount, currency, status, method, reference, created_at)
+         VALUES ($1,'airtel_initiate',$2,'UGX','pending','airtel_money',$3,NOW())
+         ON CONFLICT DO NOTHING`,
+        [uuidv4(), amount, reference]
+      ).catch(() => {});
+    }
+
+    console.log(`[Airtel SANDBOX] Simulated PIN prompt to ${phone} ref=${reference}`);
+    res.json({ data: { reference, status: 'pending', message: `Airtel Money PIN prompt sent to ${phone}. Enter your PIN to complete payment.` } });
+
   } catch (err) {
-    console.error('airtel initiate:', err);
-    res.status(500).json({ message: 'Server error' });
+    console.error('[Airtel initiate]', err);
+    res.status(500).json({ message: 'Airtel payment gateway error' });
   }
 });
 
