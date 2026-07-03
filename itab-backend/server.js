@@ -1083,12 +1083,70 @@ app.put('/api/auth/profile', auth, requirePerm('settings', 'editProfile'), async
 });
 
 app.post('/api/auth/forgot-password', async (req, res) => {
-  // In production: send reset email. For now just acknowledge.
-  res.json({ data: { message: 'If that email exists, a reset link has been sent.' } });
+  // Token-based password reset. Store a reset token in DB, return it for now.
+  // In production, send the token via email instead of returning it.
+  try {
+    const email = (req.body.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ message: 'Email is required' });
+
+    const userRes = await pool.query('SELECT id FROM users WHERE lower(email) = $1', [email]);
+    if (!userRes.rows.length) {
+      // Don't reveal whether email exists
+      return res.json({ data: { message: 'If that email exists, a reset link has been sent.' } });
+    }
+
+    const resetToken = uuidv4();
+    const expires    = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    // Store token in notes field temporarily (in production use a dedicated table)
+    await pool.query(
+      `UPDATE users SET notes = $1 WHERE id = $2`,
+      [`reset:${resetToken}:${expires.toISOString()}`, userRes.rows[0].id]
+    );
+
+    // In production: send email with link https://itabproperties.com/reset-password?token=...
+    // For now: log it (Render logs are visible in dashboard)
+    console.log(`[Password Reset] token=${resetToken} for ${email} expires=${expires.toISOString()}`);
+
+    res.json({ data: { message: 'If that email exists, a reset link has been sent.' } });
+  } catch (err) {
+    console.error('forgot-password:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
 app.post('/api/auth/reset-password', async (req, res) => {
-  res.json({ data: { message: 'Password reset functionality coming soon.' } });
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) return res.status(400).json({ message: 'Token and password are required' });
+    if (password.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters' });
+
+    // Find user with this reset token
+    const result = await pool.query(
+      `SELECT id, notes FROM users WHERE notes LIKE $1`,
+      [`reset:${token}:%`]
+    );
+    if (!result.rows.length) return res.status(400).json({ message: 'Invalid or expired reset token' });
+
+    const user = result.rows[0];
+    // Parse expiry from notes field
+    const parts = user.notes.split(':');
+    const expires = new Date(parts[2]);
+    if (new Date() > expires) {
+      return res.status(400).json({ message: 'Reset token has expired. Please request a new one.' });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    await pool.query(
+      `UPDATE users SET password_hash = $1, notes = NULL, updated_at = NOW() WHERE id = $2`,
+      [hash, user.id]
+    );
+
+    res.json({ data: { message: 'Password updated successfully. You can now log in.' } });
+  } catch (err) {
+    console.error('reset-password:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
 // Google OAuth
@@ -2283,7 +2341,49 @@ app.get('/api/payments/status/:ref', auth, requireAnyPerm([['payments', 'viewOwn
 });
 
 app.get('/api/payments/:id/receipt', auth, requirePerm('payments', 'downloadReceipt'), async (req, res) => {
-  res.json({ data: { receiptUrl: null, message: 'Receipt generation coming soon' } });
+  try {
+    const result = await pool.query('SELECT * FROM payments WHERE id=$1', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ message: 'Payment not found' });
+    const p = result.rows[0];
+
+    // Verify ownership
+    if (!hasPermission(req.effectivePermissions, 'payments', 'viewAllPayments')) {
+      if (p.tenant_id !== req.user.id && p.landlord_id !== req.user.id) {
+        return res.status(403).json({ message: 'Forbidden', code: 'PERMISSION_DENIED' });
+      }
+    }
+
+    // Build a structured receipt object (frontend uses this to render a printable receipt)
+    const receipt = {
+      receiptNumber: `RCP-${p.id.slice(0, 8).toUpperCase()}`,
+      issuedAt: new Date().toISOString(),
+      paymentId: p.id,
+      type: p.type,
+      status: p.status,
+      amount: p.amount,
+      currency: p.currency || 'UGX',
+      method: p.method,
+      reference: p.reference,
+      propertyTitle: p.property_title,
+      tenantName: p.tenant_name,
+      rentPeriod: p.rent_period,
+      isPartial: p.is_partial,
+      inspectionCreditApplied: p.inspection_credit_applied,
+      paidAt: p.paid_at,
+      createdAt: p.created_at,
+      issuedBy: 'ITAB Property Services',
+      note: p.type === 'inspection_fee'
+        ? 'Inspection fee is non-refundable. It will be credited toward your first month\'s rent if you sign a lease.'
+        : p.is_partial
+          ? 'This is a partial payment. Remaining balance must be settled by the due date.'
+          : 'Thank you for your payment.',
+    };
+
+    res.json({ data: { receipt, receiptUrl: null } });
+  } catch (err) {
+    console.error('receipt:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

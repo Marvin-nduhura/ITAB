@@ -626,26 +626,32 @@ export function PaymentsPage() {
       {/* ── Rent Balances (tenant view) ─────────────────────────────────── */}
       {user?.role === 'tenant' && (
         <div className="space-y-3">
-          {/* Deposit status */}
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-bold text-slate-900 dark:text-slate-100 text-base">Security Deposit</h2>
-              <Badge variant="green">Held in Escrow</Badge>
-            </div>
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                <p className="text-xs text-slate-400">Deposit Paid</p>
-                <p className="font-bold text-slate-900 dark:text-slate-100 mt-0.5">{formatCurrency(1800000)}</p>
+          {/* Deposit status — pulled from actual rented property */}
+          {(() => {
+            const rentedProp = allProperties.find(p => p.tenantId === user?.id && p.status === 'rented');
+            if (!rentedProp || !rentedProp.deposit) return null;
+            return (
+              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-bold text-slate-900 dark:text-slate-100 text-base">Security Deposit</h2>
+                  <Badge variant="green">Held in Escrow</Badge>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <p className="text-xs text-slate-400">Deposit Amount</p>
+                    <p className="font-bold text-slate-900 dark:text-slate-100 mt-0.5">{formatCurrency(rentedProp.deposit)}</p>
+                  </div>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+                    <p className="text-xs text-slate-400">Property</p>
+                    <p className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5 text-xs truncate">{rentedProp.title}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-400 mt-3">
+                  💡 Your deposit is held securely and will be refunded within 14 days of move-out, minus any deductions for damages.
+                </p>
               </div>
-              <div className="p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
-                <p className="text-xs text-slate-400">Property</p>
-                <p className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5 text-xs truncate">1-Bedroom Apt, Entebbe</p>
-              </div>
-            </div>
-            <p className="text-xs text-slate-400 mt-3">
-              💡 Your deposit is held securely and will be refunded within 14 days of move-out, minus any deductions for damages.
-            </p>
-          </div>
+            );
+          })()}
           <h2 className="font-bold text-slate-900 dark:text-slate-100 text-base">Monthly Rent Balances</h2>
           {visibleBalances.map((balance, i) => {
             const isExpanded = expandedBalance === balance.id;

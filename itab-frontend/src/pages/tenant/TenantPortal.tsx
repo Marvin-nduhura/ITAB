@@ -5,7 +5,6 @@ import {
   Home, Heart, Search, FileText, LogOut, Bell, Scale,
   CheckCircle2, X, Plus, Trash2, RefreshCw, DollarSign, Smartphone, Banknote, Info,
 } from 'lucide-react';
-import { AnimatePresence } from 'framer-motion';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
@@ -34,12 +33,9 @@ export function TenantPortal() {
   const navigate = useNavigate();
 
   const [tab, setTab] = useState<'lease' | 'favorites' | 'searches' | 'compare' | 'moveout' | 'renewal'>('lease');
-  const [favorites, setFavorites] = useState<string[]>(['p1', 'p4']);
-  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([
-    { id: 'ss1', name: '2BR in Kampala under 1.5M', filters: { district: 'Kampala', bedrooms: 2, maxPrice: 1500000 }, alertEnabled: true, createdAt: '2024-03-01T00:00:00Z' },
-    { id: 'ss2', name: 'Furnished apartments', filters: { type: 'apartment' }, alertEnabled: false, createdAt: '2024-03-10T00:00:00Z' },
-  ]);
-  const [compareList, setCompareList] = useState<string[]>(['p1', 'p2']);
+  const [favorites, setFavorites] = useState<string[]>([]);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+  const [compareList, setCompareList] = useState<string[]>([]);
   const [showAddSearch, setShowAddSearch] = useState(false);
   const [showMoveout, setShowMoveout] = useState(false);
   const [newSearch, setNewSearch] = useState({ name: '', district: '', type: '', minPrice: '', maxPrice: '', bedrooms: '' });
@@ -288,7 +284,7 @@ export function TenantPortal() {
                     <Button variant="secondary" className="flex-1" icon={<FileText size={14} />} onClick={() => {
                       if (currentProperty) {
                         downloadLease({
-                          tenantName: 'Grace Apio',
+                          tenantName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Tenant',
                           propertyTitle: currentProperty.title,
                           address: currentProperty.address,
                           rentAmount: currentProperty.rentPrice,
