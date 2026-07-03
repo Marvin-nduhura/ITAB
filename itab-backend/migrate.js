@@ -357,7 +357,7 @@ async function main() {
   console.log('🏢 Creating property_units table...');
   await run(`CREATE TABLE IF NOT EXISTS property_units (
     id                TEXT PRIMARY KEY,
-    property_id       TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    property_id       TEXT NOT NULL,
     unit_name         TEXT NOT NULL,
     description       TEXT,
     floor_number      INTEGER,
@@ -369,7 +369,7 @@ async function main() {
     photos            JSONB DEFAULT '[]',
     amenities         JSONB DEFAULT '[]',
     status            TEXT NOT NULL DEFAULT 'available',
-    tenant_id         TEXT REFERENCES users(id) ON DELETE SET NULL,
+    tenant_id         TEXT,
     tenant_name       TEXT,
     lease_start       DATE,
     lease_end         DATE,

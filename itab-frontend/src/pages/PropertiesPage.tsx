@@ -231,6 +231,12 @@ export function PropertiesPage() {
                     <p className="text-lg font-bold text-primary-600">{formatCurrency(p.rentPrice)}</p>
                     <p className="text-xs text-slate-400">per month · {p.type.replace(/_/g, ' ')}</p>
                   </div>
+                  {/* Available units badge for apartments/commercial */}
+                  {p.hasUnits && (
+                    <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+                      🏠 Units available
+                    </span>
+                  )}
                   <Button size="sm" onClick={e => { e.stopPropagation(); navigate(`/properties/${p.id}`); }}>View</Button>
                 </div>
               </div>
@@ -264,6 +270,11 @@ export function PropertiesPage() {
                   <div>
                     <p className="font-bold text-primary-600">{formatCurrency(p.rentPrice)}</p>
                     <p className="text-xs text-slate-400">per month</p>
+                    {p.hasUnits && (
+                      <span className="inline-block text-xs font-semibold mt-0.5 px-2 py-0.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">
+                        🏠 Units available
+                      </span>
+                    )}
                   </div>
                   {canEdit(p) && (
                     <div className="flex gap-1.5" onClick={e => e.stopPropagation()}>

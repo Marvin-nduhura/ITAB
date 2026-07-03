@@ -39,6 +39,13 @@ Runs at **http://localhost:5000**
 | Tenant           | tenant@itab.ug       | password123 |
 | Agent            | agent@itab.ug        | password123 |
 
+## 🌐 Live URLs
+
+| Service  | URL |
+|----------|-----|
+| Frontend | https://itabproperties.com |
+| Backend  | https://itab-tdrp.onrender.com |
+
 ---
 
 ## 📱 PWA Installation
