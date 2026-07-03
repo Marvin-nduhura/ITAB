@@ -276,7 +276,10 @@ export const agentApplicationsApi = {
     api.patch<ApiResponse<unknown>>(`/agent-applications/${id}/docs`, data),
 };
 
-// ─── Payment Preferences ──────────────────────────────────────────────────────
+// ─── User Search (live search for messaging) ──────────────────────────────────
+export const userSearchApi = {
+  search: (q: string) => api.get<ApiResponse<{ id: string; firstName: string; lastName: string; email: string; role: string; avatar?: string; phone?: string }[]>>('/users/search', { params: { q } }),
+};
 export const paymentPreferencesApi = {
   get:  (userId: string) => api.get<ApiResponse<unknown>>(`/payment-preferences/${userId}`),
   save: (data: unknown) => api.post<ApiResponse<unknown>>('/payment-preferences', data),

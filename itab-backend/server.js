@@ -2622,20 +2622,60 @@ app.post('/api/payouts/:id/retry', auth, requireRole('admin', 'property_manager'
 // MESSAGES ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Live user search — for starting new conversations
+app.get('/api/users/search', auth, async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim();
+    if (!q) return res.json({ data: [] });
+
+    const result = await pool.query(
+      `SELECT id, first_name, last_name, email, role, avatar, phone
+       FROM users
+       WHERE is_suspended = false
+         AND id != $1
+         AND (
+           lower(first_name) LIKE $2 OR
+           lower(last_name)  LIKE $2 OR
+           lower(email)      LIKE $2 OR
+           lower(first_name || ' ' || last_name) LIKE $2
+         )
+       ORDER BY first_name, last_name
+       LIMIT 20`,
+      [req.user.id, `%${q.toLowerCase()}%`]
+    );
+    res.json({
+      data: result.rows.map(u => ({
+        id: u.id,
+        firstName: u.first_name,
+        lastName: u.last_name,
+        email: u.email,
+        role: u.role,
+        avatar: u.avatar,
+        phone: u.phone,
+      })),
+    });
+  } catch (err) {
+    console.error('user search:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 app.get('/api/messages/conversations', auth, requirePerm('messages', 'viewMessages'), async (req, res) => {
   try {
+    // participants column may store either [{id,name,role}] objects or plain [id] strings
+    // Use a text search to find conversations where this user's id appears anywhere in participants
     const result = await pool.query(
-      `SELECT c.*, 
+      `SELECT c.*,
         (SELECT row_to_json(m) FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC LIMIT 1) as last_message,
         (SELECT COUNT(*) FROM messages m WHERE m.conversation_id=c.id AND m.is_read=false AND m.sender_id != $1) as unread_count
        FROM conversations c
-       WHERE c.participants @> $2::jsonb
+       WHERE c.participants::text LIKE $2
        ORDER BY c.updated_at DESC`,
-      [req.user.id, JSON.stringify([{ id: req.user.id }])]
+      [req.user.id, `%${req.user.id}%`]
     );
     res.json({ data: result.rows.map(formatConversation) });
   } catch (err) {
-    console.error(err);
+    console.error('conversations:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -2660,15 +2700,70 @@ app.get('/api/messages/:convId', auth, requirePerm('messages', 'viewMessages'), 
 app.post('/api/messages/conversations', auth, requirePerm('messages', 'sendMessage'), async (req, res) => {
   try {
     const { participantIds, participantDetails, propertyId, propertyTitle } = req.body;
+    if (!participantIds || !Array.isArray(participantIds) || participantIds.length === 0) {
+      return res.status(400).json({ message: 'participantIds is required' });
+    }
+
+    // Build the full participant list including the sender
+    const allParticipantIds = [...new Set([...participantIds, req.user.id])];
+
+    // For 1:1 conversations: check if one already exists between these two users
+    if (allParticipantIds.length === 2 && !propertyId) {
+      const existing = await pool.query(
+        `SELECT * FROM conversations
+         WHERE participants::text LIKE $1
+           AND participants::text LIKE $2
+           AND property_id IS NULL
+         ORDER BY updated_at DESC LIMIT 1`,
+        [`%${allParticipantIds[0]}%`, `%${allParticipantIds[1]}%`]
+      );
+      if (existing.rows.length > 0) {
+        // Return the existing conversation instead of creating a duplicate
+        const row = existing.rows[0];
+        const lastMsg = await pool.query('SELECT row_to_json(m) FROM messages m WHERE m.conversation_id=$1 ORDER BY m.created_at DESC LIMIT 1', [row.id]);
+        row.last_message = lastMsg.rows[0]?.row_to_json || null;
+        row.unread_count = 0;
+        return res.status(200).json({ data: formatConversation(row) });
+      }
+    }
+
+    // Build participants array — always store as [{id, name, role}] objects
+    let participants = participantDetails;
+    if (!participants || !Array.isArray(participants)) {
+      // Fetch user details for all participants
+      const userRows = await pool.query(
+        `SELECT id, first_name, last_name, role FROM users WHERE id = ANY($1)`,
+        [allParticipantIds]
+      );
+      participants = userRows.rows.map(u => ({
+        id: u.id,
+        name: `${u.first_name} ${u.last_name}`.trim(),
+        role: u.role,
+      }));
+    }
+
+    // Ensure sender is included
+    const senderInList = participants.some(p => p.id === req.user.id);
+    if (!senderInList) {
+      const senderRow = await pool.query('SELECT first_name, last_name, role FROM users WHERE id=$1', [req.user.id]);
+      if (senderRow.rows.length) {
+        const s = senderRow.rows[0];
+        participants.push({ id: req.user.id, name: `${s.first_name} ${s.last_name}`.trim(), role: s.role });
+      }
+    }
+
     const id = uuidv4();
     const result = await pool.query(
       `INSERT INTO conversations (id, participants, property_id, property_title, unread_count)
-       VALUES ($1,$2,$3,$4,0) RETURNING *`,
-      [id, JSON.stringify(participantDetails || participantIds), propertyId || null, propertyTitle || null]
+       VALUES ($1,$2::jsonb,$3,$4,0) RETURNING *`,
+      [id, JSON.stringify(participants), propertyId || null, propertyTitle || null]
     );
-    res.status(201).json({ data: formatConversation(result.rows[0]) });
+    const row = result.rows[0];
+    row.last_message = null;
+    row.unread_count = 0;
+    res.status(201).json({ data: formatConversation(row) });
   } catch (err) {
-    console.error(err);
+    console.error('create conversation:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -2676,19 +2771,31 @@ app.post('/api/messages/conversations', auth, requirePerm('messages', 'sendMessa
 app.post('/api/messages/:convId', auth, requirePerm('messages', 'sendMessage'), async (req, res) => {
   try {
     const { content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: 'Message content is required' });
+    }
+
+    // Verify this user is a participant in the conversation
+    const convCheck = await pool.query('SELECT participants FROM conversations WHERE id=$1', [req.params.convId]);
+    if (!convCheck.rows.length) return res.status(404).json({ message: 'Conversation not found' });
+    const participantsStr = JSON.stringify(convCheck.rows[0].participants);
+    if (!participantsStr.includes(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'You are not a participant in this conversation' });
+    }
+
     const senderResult = await pool.query('SELECT * FROM users WHERE id=$1', [req.user.id]);
     const sender = senderResult.rows[0];
     const id = uuidv4();
     const result = await pool.query(
       `INSERT INTO messages (id, conversation_id, sender_id, sender_name, sender_avatar, content, is_read)
        VALUES ($1,$2,$3,$4,$5,$6,false) RETURNING *`,
-      [id, req.params.convId, req.user.id, `${sender.first_name} ${sender.last_name}`, sender.avatar || null, content]
+      [id, req.params.convId, req.user.id, `${sender.first_name} ${sender.last_name}`.trim(), sender.avatar || null, content.trim()]
     );
-    // Update conversation updated_at
+    // Update conversation updated_at and last_message context
     await pool.query('UPDATE conversations SET updated_at=NOW() WHERE id=$1', [req.params.convId]).catch(() => {});
     res.status(201).json({ data: formatMessage(result.rows[0]) });
   } catch (err) {
-    console.error(err);
+    console.error('send message:', err);
     res.status(500).json({ message: 'Server error' });
   }
 });

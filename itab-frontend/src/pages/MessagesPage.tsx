@@ -1,182 +1,161 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Send, Search, MessageSquare, Plus, Users, X, Building2, ChevronDown } from 'lucide-react';
+import { Send, Search, MessageSquare, Plus, X, ChevronRight, RefreshCw } from 'lucide-react';
 import { Avatar } from '../components/ui/Avatar';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { EmptyState } from '../components/ui/EmptyState';
+import { Badge } from '../components/ui/Badge';
 import { useAuthStore } from '../store/authStore';
 import { useDataStore } from '../store/dataStore';
-import { useUserStore } from '../store/userStore';
-import { usePropertyStore } from '../store/propertyStore';
-import { messagesApi } from '../lib/api';
-import { filterPropertiesForUser } from '../lib/rbac';
+import { messagesApi, userSearchApi } from '../lib/api';
 import { timeAgo } from '../lib/utils';
 import toast from 'react-hot-toast';
 import type { Conversation, Message } from '../types';
 
-type NewConvMode = 'person' | 'property';
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface SearchUser {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  role: string;
+  avatar?: string;
+  phone?: string;
+}
 
 export function MessagesPage() {
   const { user } = useAuthStore();
   const { conversations, messages, setConversations, setMessages, addMessage } = useDataStore();
-  const { users } = useUserStore();
-  const { properties: allProperties } = usePropertyStore();
 
-  // Roles that can do property-based bulk messaging
-  const canBulkByProperty = user?.role === 'admin' || user?.role === 'property_manager' || user?.role === 'landlord';
-
-  // Properties this user manages/owns
-  const myProperties = filterPropertiesForUser(allProperties, user).filter(
-    p => p.status === 'rented' || p.status === 'published' || p.status === 'under_maintenance'
-  );
-
+  // ── Conversation sidebar state ────────────────────────────────────────────
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [convSearch, setConvSearch] = useState('');
+  const [loadingConvs, setLoadingConvs] = useState(false);
+
+  // ── Message input state ───────────────────────────────────────────────────
   const [newMessage, setNewMessage] = useState('');
   const [sending, setSending] = useState(false);
-  const [search, setSearch] = useState('');
-  const [showNewConv, setShowNewConv] = useState(false);
-  const [creatingConv, setCreatingConv] = useState(false);
-
-  // "New Conversation" modal state
-  const [newConvMode, setNewConvMode] = useState<NewConvMode>('person');
-
-  // Person mode
-  const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
-  const [userSearch, setUserSearch] = useState('');
-
-  // Property mode
-  const [selectedPropertyId, setSelectedPropertyId] = useState<string>('');
-  const [propertySearch, setPropertySearch] = useState('');
-  const [selectedTenantIds, setSelectedTenantIds] = useState<string[]>([]);
-  const [tenantSearch, setTenantSearch] = useState('');
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
+  // ── New conversation modal state ──────────────────────────────────────────
+  const [showNewConv, setShowNewConv] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchUser[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selectedUsers, setSelectedUsers] = useState<SearchUser[]>([]);
+  const [creatingConv, setCreatingConv] = useState(false);
+  const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Derived state ─────────────────────────────────────────────────────────
   const activeConv = conversations.find(c => c.id === activeConvId);
   const activeMessages = activeConvId ? (messages[activeConvId] || []) : [];
 
-  // Filter conversations by search
-  const filteredConvs = conversations.filter(c => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return c.participants.some(p => p.name?.toLowerCase().includes(q)) ||
-           c.propertyTitle?.toLowerCase().includes(q);
-  });
+  const filteredConvs = convSearch.trim()
+    ? conversations.filter(c => {
+        const q = convSearch.toLowerCase();
+        return (
+          c.participants?.some(p => p.name?.toLowerCase().includes(q)) ||
+          c.propertyTitle?.toLowerCase().includes(q) ||
+          (c.lastMessage as Message | null)?.content?.toLowerCase().includes(q)
+        );
+      })
+    : conversations;
 
-  // Load messages when conversation is selected
+  // ── Load conversations on mount + poll every 8s ───────────────────────────
+  const loadConversations = useCallback(async (silent = false) => {
+    if (!silent) setLoadingConvs(true);
+    try {
+      const res = await messagesApi.conversations();
+      const convs = (res.data as { data: Conversation[] }).data;
+      if (Array.isArray(convs)) setConversations(convs);
+    } catch { /* keep cached */ }
+    finally { if (!silent) setLoadingConvs(false); }
+  }, [setConversations]);
+
+  useEffect(() => {
+    loadConversations();
+    const interval = setInterval(() => loadConversations(true), 8000);
+    return () => clearInterval(interval);
+  }, [loadConversations]);
+
+  // ── Load messages when conversation is selected + poll every 4s ──────────
   const loadMessages = useCallback(async (convId: string) => {
     try {
       const res = await messagesApi.messages(convId);
       const msgs = (res.data as { data: Message[] }).data;
-      setMessages(convId, msgs);
-    } catch {
-      // Keep cached messages
-    }
+      if (Array.isArray(msgs)) setMessages(convId, msgs);
+    } catch { /* keep cached */ }
   }, [setMessages]);
 
   useEffect(() => {
-    if (activeConvId) loadMessages(activeConvId);
+    if (!activeConvId) return;
+    loadMessages(activeConvId);
+    const interval = setInterval(() => loadMessages(activeConvId), 4000);
+    return () => clearInterval(interval);
   }, [activeConvId, loadMessages]);
 
-  // Auto-scroll to bottom
+  // ── Auto-scroll to latest message ─────────────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeMessages.length]);
 
-  // Reload conversations from backend
+  // ── Focus input when conversation selected ────────────────────────────────
   useEffect(() => {
-    messagesApi.conversations()
-      .then(res => {
-        const convs = (res.data as { data: Conversation[] }).data;
-        if (Array.isArray(convs)) setConversations(convs);
-      })
-      .catch(() => {});
-  }, [setConversations]);
+    if (activeConvId) setTimeout(() => inputRef.current?.focus(), 100);
+  }, [activeConvId]);
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
+  // ── Live user search with debounce ────────────────────────────────────────
+  useEffect(() => {
+    if (searchDebounce.current) clearTimeout(searchDebounce.current);
+    if (!userSearch.trim()) { setSearchResults([]); setSearching(false); return; }
+    setSearching(true);
+    searchDebounce.current = setTimeout(async () => {
+      try {
+        const res = await userSearchApi.search(userSearch.trim());
+        setSearchResults(res.data?.data || []);
+      } catch { setSearchResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => { if (searchDebounce.current) clearTimeout(searchDebounce.current); };
+  }, [userSearch]);
 
-  const resetModal = () => {
-    setShowNewConv(false);
-    setNewConvMode('person');
-    setSelectedParticipants([]);
-    setUserSearch('');
-    setSelectedPropertyId('');
-    setPropertySearch('');
-    setSelectedTenantIds([]);
-    setTenantSearch('');
-  };
-
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const getConvName = (conv: Conversation) => {
-    const others = conv.participants.filter(p => p.id !== user?.id);
+    const others = (conv.participants || []).filter(p => p.id !== user?.id);
     if (others.length === 0) return 'You';
-    if (others.length === 1) return others[0].name;
+    if (others.length === 1) return others[0].name || 'Unknown';
     return `${others[0].name} +${others.length - 1}`;
   };
 
-  const getConvInitials = (conv: Conversation) => {
-    const name = getConvName(conv);
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  const toggleUser = (u: SearchUser) => {
+    setSelectedUsers(prev =>
+      prev.find(x => x.id === u.id)
+        ? prev.filter(x => x.id !== u.id)
+        : [...prev, u]
+    );
   };
 
-  // ── Person mode: filtered user list ──────────────────────────────────────
-  const otherUsers = users.filter(u => u.id !== user?.id);
-  const filteredUsers = userSearch.trim()
-    ? otherUsers.filter(u =>
-        `${u.firstName} ${u.lastName}`.toLowerCase().includes(userSearch.toLowerCase()) ||
-        u.email?.toLowerCase().includes(userSearch.toLowerCase()) ||
-        u.role?.toLowerCase().includes(userSearch.toLowerCase())
-      )
-    : otherUsers;
-
-  // ── Property mode: filtered properties ───────────────────────────────────
-  const filteredProperties = propertySearch.trim()
-    ? myProperties.filter(p =>
-        p.title.toLowerCase().includes(propertySearch.toLowerCase()) ||
-        p.district.toLowerCase().includes(propertySearch.toLowerCase()) ||
-        p.address.toLowerCase().includes(propertySearch.toLowerCase())
-      )
-    : myProperties;
-
-  // Tenants in the selected property
-  const selectedProperty = myProperties.find(p => p.id === selectedPropertyId);
-  const tenantsInProperty = selectedPropertyId
-    ? users.filter(u => {
-        if (u.role !== 'tenant') return false;
-        // Match by tenantId on the property
-        return u.id === selectedProperty?.tenantId;
-      })
-    : [];
-
-  // Filtered tenant list by search
-  const filteredTenants = tenantSearch.trim()
-    ? tenantsInProperty.filter(u =>
-        `${u.firstName} ${u.lastName}`.toLowerCase().includes(tenantSearch.toLowerCase()) ||
-        u.email?.toLowerCase().includes(tenantSearch.toLowerCase())
-      )
-    : tenantsInProperty;
-
-  const allTenantsSelected =
-    filteredTenants.length > 0 && filteredTenants.every(u => selectedTenantIds.includes(u.id));
-
-  const toggleSelectAllTenants = () => {
-    if (allTenantsSelected) {
-      setSelectedTenantIds([]);
-    } else {
-      setSelectedTenantIds(filteredTenants.map(u => u.id));
-    }
+  const resetModal = () => {
+    setShowNewConv(false);
+    setUserSearch('');
+    setSearchResults([]);
+    setSelectedUsers([]);
+    setCreatingConv(false);
   };
 
-  // ── Send handlers ─────────────────────────────────────────────────────────
-
+  // ── Send message ──────────────────────────────────────────────────────────
   const handleSend = async () => {
-    if (!newMessage.trim() || !activeConvId) return;
     const content = newMessage.trim();
+    if (!content || !activeConvId) return;
     setNewMessage('');
     setSending(true);
 
+    // Optimistic message
+    const tempId = `temp_${Date.now()}`;
     const tempMsg: Message = {
-      id: `temp_${Date.now()}`,
+      id: tempId,
       conversationId: activeConvId,
       senderId: user?.id || '',
       senderName: `${user?.firstName} ${user?.lastName}`,
@@ -191,62 +170,42 @@ export function MessagesPage() {
       const res = await messagesApi.send(activeConvId, content);
       const saved = (res.data as { data: Message }).data;
       const current = messages[activeConvId] || [];
-      setMessages(activeConvId, current.map(m => m.id === tempMsg.id ? saved : m));
+      setMessages(activeConvId, current.map(m => m.id === tempId ? saved : m));
+      // Refresh conversation list to update last message preview
+      loadConversations(true);
     } catch {
       toast.error('Failed to send message');
       const current = messages[activeConvId] || [];
-      setMessages(activeConvId, current.filter(m => m.id !== tempMsg.id));
+      setMessages(activeConvId, current.filter(m => m.id !== tempId));
+      setNewMessage(content); // restore
     } finally {
       setSending(false);
     }
   };
 
-  // Start a 1:1 or group conversation with selected persons
-  const handleStartPersonConversation = async () => {
-    if (selectedParticipants.length === 0) { toast.error('Select at least one person'); return; }
+  // ── Start new conversation ────────────────────────────────────────────────
+  const handleStartConversation = async () => {
+    if (selectedUsers.length === 0) { toast.error('Select at least one person'); return; }
     setCreatingConv(true);
     try {
-      const participantDetails = selectedParticipants.map(id => {
-        const u = users.find(x => x.id === id);
-        return { id, name: u ? `${u.firstName} ${u.lastName}` : id, role: u?.role || 'tenant' };
-      });
-      if (user) participantDetails.push({ id: user.id, name: `${user.firstName} ${user.lastName}`, role: user.role });
+      const participantIds  = selectedUsers.map(u => u.id);
+      const participantDetails = selectedUsers.map(u => ({
+        id: u.id,
+        name: `${u.firstName} ${u.lastName}`.trim(),
+        role: u.role,
+      }));
 
-      const res = await messagesApi.startConv({ participantIds: selectedParticipants, participantDetails });
+      const res = await messagesApi.startConv({ participantIds, participantDetails });
       const conv = (res.data as { data: Conversation }).data;
-      setConversations([conv, ...conversations]);
+
+      // Upsert: if conversation already exists (dedup), just switch to it
+      setConversations(prev => {
+        const exists = prev.find(c => c.id === conv.id);
+        return exists ? prev : [conv, ...prev];
+      });
       setActiveConvId(conv.id);
       resetModal();
-    } catch {
-      toast.error('Failed to start conversation');
-    } finally {
-      setCreatingConv(false);
-    }
-  };
-
-  // Start a conversation with all/selected tenants in a property
-  const handleStartPropertyConversation = async () => {
-    if (!selectedPropertyId) { toast.error('Select a property first'); return; }
-    if (selectedTenantIds.length === 0) { toast.error('Select at least one tenant'); return; }
-    setCreatingConv(true);
-    try {
-      const participantDetails = selectedTenantIds.map(id => {
-        const u = users.find(x => x.id === id);
-        return { id, name: u ? `${u.firstName} ${u.lastName}` : id, role: u?.role || 'tenant' };
-      });
-      if (user) participantDetails.push({ id: user.id, name: `${user.firstName} ${user.lastName}`, role: user.role });
-
-      const prop = myProperties.find(p => p.id === selectedPropertyId);
-      const res = await messagesApi.startConv({
-        participantIds: selectedTenantIds,
-        participantDetails,
-        propertyId: selectedPropertyId,
-        propertyTitle: prop?.title,
-      });
-      const conv = (res.data as { data: Conversation }).data;
-      setConversations([conv, ...conversations]);
-      setActiveConvId(conv.id);
-      resetModal();
+      toast.success(`Conversation started with ${selectedUsers.map(u => u.firstName).join(', ')}`);
     } catch {
       toast.error('Failed to start conversation');
     } finally {
@@ -255,35 +214,44 @@ export function MessagesPage() {
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
-
-  const canStart = newConvMode === 'person'
-    ? selectedParticipants.length > 0
-    : (selectedPropertyId && selectedTenantIds.length > 0);
-
-  const handleStart = () => {
-    if (newConvMode === 'person') handleStartPersonConversation();
-    else handleStartPropertyConversation();
-  };
-
   return (
     <div className="flex h-[calc(100vh-8rem)] bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 overflow-hidden">
 
-      {/* ── Sidebar ─────────────────────────────────────────────────────── */}
+      {/* ── Sidebar ───────────────────────────────────────────────────── */}
       <div className="w-80 flex-shrink-0 border-r border-slate-100 dark:border-slate-700 flex flex-col">
+
+        {/* Sidebar header */}
         <div className="p-4 border-b border-slate-100 dark:border-slate-700">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-bold text-slate-900 dark:text-slate-100">Messages</h2>
-            <Button size="sm" icon={<Plus size={14} />} onClick={() => setShowNewConv(true)}>New</Button>
+            <h2 className="font-bold text-slate-900 dark:text-slate-100 text-base">Messages</h2>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => loadConversations()}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                title="Refresh"
+              >
+                <RefreshCw size={14} className={loadingConvs ? 'animate-spin' : ''} />
+              </button>
+              <Button size="sm" icon={<Plus size={14} />} onClick={() => setShowNewConv(true)}>
+                New
+              </Button>
+            </div>
           </div>
+          {/* Conversation search */}
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               placeholder="Search conversations..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
+              value={convSearch}
+              onChange={e => setConvSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400"
             />
+            {convSearch && (
+              <button onClick={() => setConvSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                <X size={13} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -291,128 +259,171 @@ export function MessagesPage() {
         <div className="flex-1 overflow-y-auto">
           {filteredConvs.length === 0 ? (
             <div className="p-6 text-center">
-              <MessageSquare size={32} className="mx-auto text-slate-300 mb-2" />
-              <p className="text-sm text-slate-400">No conversations yet</p>
-              <Button size="sm" className="mt-3" onClick={() => setShowNewConv(true)}>Start one</Button>
+              <MessageSquare size={28} className="mx-auto text-slate-300 mb-2" />
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {convSearch ? 'No conversations match your search' : 'No conversations yet'}
+              </p>
+              {!convSearch && (
+                <Button size="sm" className="mt-3" onClick={() => setShowNewConv(true)}>
+                  Start a conversation
+                </Button>
+              )}
             </div>
           ) : (
             filteredConvs.map(conv => {
               const isActive = conv.id === activeConvId;
-              const lastMsg = conv.lastMessage;
+              const convName = getConvName(conv);
+              const lastMsg = conv.lastMessage as Message | null;
+              const unread = Number(conv.unreadCount || 0);
+
               return (
-                <button
+                <motion.button
                   key={conv.id}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
                   onClick={() => setActiveConvId(conv.id)}
-                  className={`w-full flex items-start gap-3 p-4 text-left transition-colors border-b border-slate-50 dark:border-slate-700/50 ${isActive ? 'bg-primary-50 dark:bg-primary-900/20' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}
+                  className={`w-full flex items-start gap-3 p-4 text-left border-b border-slate-50 dark:border-slate-700/50 transition-all ${
+                    isActive
+                      ? 'bg-primary-50 dark:bg-primary-900/20 border-l-2 border-l-primary-500'
+                      : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                  }`}
                 >
-                  <div className="w-10 h-10 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center text-primary-700 dark:text-primary-300 font-bold text-sm flex-shrink-0">
-                    {getConvInitials(conv)}
-                  </div>
+                  <Avatar name={convName} size="md" className="flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate">{getConvName(conv)}</p>
-                      {conv.unreadCount > 0 && (
-                        <span className="flex-shrink-0 w-5 h-5 bg-primary-600 text-white text-xs rounded-full flex items-center justify-center font-bold">
-                          {conv.unreadCount}
+                      <p className={`text-sm font-semibold truncate ${isActive ? 'text-primary-700 dark:text-primary-300' : 'text-slate-900 dark:text-slate-100'}`}>
+                        {convName}
+                      </p>
+                      <span className="text-xs text-slate-400 flex-shrink-0">
+                        {conv.updatedAt ? timeAgo(conv.updatedAt) : ''}
+                      </span>
+                    </div>
+                    {conv.propertyTitle && (
+                      <p className="text-xs text-primary-500 dark:text-primary-400 truncate mt-0.5">
+                        🏠 {conv.propertyTitle}
+                      </p>
+                    )}
+                    <div className="flex items-center justify-between mt-0.5">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                        {lastMsg
+                          ? lastMsg.senderId === user?.id
+                            ? `You: ${lastMsg.content}`
+                            : lastMsg.content
+                          : 'No messages yet'}
+                      </p>
+                      {unread > 0 && (
+                        <span className="ml-2 flex-shrink-0 text-xs bg-primary-500 text-white font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                          {unread}
                         </span>
                       )}
                     </div>
-                    {conv.propertyTitle && (
-                      <p className="text-xs text-primary-600 dark:text-primary-400 truncate">📍 {conv.propertyTitle}</p>
-                    )}
-                    {lastMsg && (
-                      <p className="text-xs text-slate-400 truncate mt-0.5">{lastMsg.content}</p>
-                    )}
-                    <p className="text-xs text-slate-300 dark:text-slate-600 mt-0.5">{timeAgo(conv.updatedAt)}</p>
                   </div>
-                </button>
+                </motion.button>
               );
             })
           )}
         </div>
       </div>
 
-      {/* ── Chat area ────────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {!activeConv ? (
-          <div className="flex-1 flex items-center justify-center">
-            <EmptyState
-              icon={<MessageSquare size={32} />}
-              title="Select a conversation"
-              description="Choose a conversation from the left or start a new one."
-            />
-          </div>
-        ) : (
-          <>
-            {/* Chat header */}
-            <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center text-primary-700 dark:text-primary-300 font-bold text-sm">
-                {getConvInitials(activeConv)}
-              </div>
-              <div>
-                <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{getConvName(activeConv)}</p>
-                {activeConv.propertyTitle && (
-                  <p className="text-xs text-slate-400">📍 {activeConv.propertyTitle}</p>
-                )}
-              </div>
-            </div>
-
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {activeMessages.length === 0 ? (
-                <div className="text-center py-8 text-sm text-slate-400">No messages yet. Say hello!</div>
-              ) : (
-                activeMessages.map(msg => {
-                  const isMe = msg.senderId === user?.id;
-                  return (
-                    <motion.div
-                      key={msg.id}
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`flex items-end gap-2 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}
-                    >
-                      {!isMe && <Avatar name={msg.senderName} src={msg.senderAvatar} size="xs" />}
-                      <div className={`max-w-[70%] ${isMe ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
-                        {!isMe && <p className="text-xs text-slate-400 px-1">{msg.senderName}</p>}
-                        <div className={`px-4 py-2.5 rounded-2xl text-sm ${
-                          isMe
-                            ? 'bg-primary-600 text-white rounded-br-sm'
-                            : 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-bl-sm'
-                        }`}>
-                          {msg.content}
-                        </div>
-                        <p className="text-xs text-slate-300 dark:text-slate-600 px-1">{timeAgo(msg.createdAt)}</p>
-                      </div>
-                    </motion.div>
-                  );
-                })
+      {/* ── Message thread ─────────────────────────────────────────────── */}
+      {activeConv ? (
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Thread header */}
+          <div className="flex items-center gap-3 px-5 py-3.5 border-b border-slate-100 dark:border-slate-700 bg-white dark:bg-slate-800">
+            <Avatar name={getConvName(activeConv)} size="sm" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{getConvName(activeConv)}</p>
+              {activeConv.propertyTitle && (
+                <p className="text-xs text-slate-400 truncate">🏠 {activeConv.propertyTitle}</p>
               )}
-              <div ref={messagesEndRef} />
             </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {(activeConv.participants || []).filter(p => p.id !== user?.id).map(p => (
+                <Badge key={p.id} variant="gray" className="text-xs capitalize">{p.role?.replace('_', ' ')}</Badge>
+              ))}
+            </div>
+          </div>
 
-            {/* Input */}
-            <div className="p-4 border-t border-slate-100 dark:border-slate-700">
-              <div className="flex items-end gap-2">
-                <textarea
-                  value={newMessage}
-                  onChange={e => setNewMessage(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
-                  }}
-                  placeholder="Type a message... (Enter to send)"
-                  rows={1}
-                  className="flex-1 px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400 resize-none"
-                />
-                <Button icon={<Send size={16} />} onClick={handleSend} loading={sending} disabled={!newMessage.trim()} className="flex-shrink-0">
-                  Send
-                </Button>
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            {activeMessages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <MessageSquare size={36} className="text-slate-200 dark:text-slate-600 mb-3" />
+                <p className="text-slate-400 text-sm">No messages yet. Say hello!</p>
               </div>
-            </div>
-          </>
-        )}
-      </div>
+            ) : (
+              activeMessages.map(msg => {
+                const isMine = msg.senderId === user?.id;
+                return (
+                  <motion.div
+                    key={msg.id}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`flex items-end gap-2.5 ${isMine ? 'flex-row-reverse' : ''}`}
+                  >
+                    {!isMine && <Avatar name={msg.senderName} size="xs" className="flex-shrink-0 mb-1" />}
+                    <div className={`max-w-[70%] ${isMine ? 'items-end' : 'items-start'} flex flex-col gap-1`}>
+                      {!isMine && (
+                        <span className="text-xs text-slate-400 px-1">{msg.senderName}</span>
+                      )}
+                      <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+                        isMine
+                          ? 'bg-primary-600 text-white rounded-br-sm'
+                          : 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-bl-sm'
+                      } ${msg.id.startsWith('temp_') ? 'opacity-70' : ''}`}>
+                        {msg.content}
+                      </div>
+                      <span className="text-xs text-slate-400 px-1">{timeAgo(msg.createdAt)}</span>
+                    </div>
+                  </motion.div>
+                );
+              })
+            )}
+            <div ref={messagesEndRef} />
+          </div>
 
-      {/* ── New Conversation Modal ──────────────────────────────────────── */}
+          {/* Message input */}
+          <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-white dark:bg-slate-800">
+            <div className="flex items-center gap-3">
+              <input
+                ref={inputRef}
+                type="text"
+                placeholder="Type a message..."
+                value={newMessage}
+                onChange={e => setNewMessage(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                className="flex-1 px-4 py-2.5 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400"
+                disabled={sending}
+              />
+              <Button
+                onClick={handleSend}
+                disabled={!newMessage.trim() || sending}
+                loading={sending}
+                icon={<Send size={15} />}
+                className="flex-shrink-0"
+              >
+                Send
+              </Button>
+            </div>
+            <p className="text-xs text-slate-400 mt-1.5 px-1">Press Enter to send</p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center">
+          <EmptyState
+            icon={<MessageSquare size={32} />}
+            title="Select a conversation"
+            description="Choose a conversation from the list, or start a new one."
+            action={
+              <Button icon={<Plus size={15} />} onClick={() => setShowNewConv(true)}>
+                New Conversation
+              </Button>
+            }
+          />
+        </div>
+      )}
+
+      {/* ── New Conversation Modal ─────────────────────────────────────── */}
       <Modal
         open={showNewConv}
         onClose={resetModal}
@@ -423,253 +434,108 @@ export function MessagesPage() {
             <Button variant="secondary" onClick={resetModal}>Cancel</Button>
             <Button
               loading={creatingConv}
-              icon={newConvMode === 'property' ? <Building2 size={14} /> : <Users size={14} />}
-              onClick={handleStart}
-              disabled={!canStart}
+              disabled={selectedUsers.length === 0}
+              onClick={handleStartConversation}
+              icon={<ChevronRight size={14} />}
             >
-              Start Conversation
+              Start {selectedUsers.length > 1 ? `Group Chat (${selectedUsers.length})` : 'Chat'}
             </Button>
           </>
         }
       >
         <div className="space-y-4">
-
-          {/* Mode tabs — only show "By Property" tab for privileged roles */}
-          {canBulkByProperty && (
-            <div className="flex bg-slate-100 dark:bg-slate-700 rounded-xl p-1 gap-1">
-              <button
-                onClick={() => setNewConvMode('person')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-medium transition-all ${
-                  newConvMode === 'person'
-                    ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-900 dark:text-slate-100'
-                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                }`}
-              >
-                <Users size={14} />
-                By Person
-              </button>
-              <button
-                onClick={() => setNewConvMode('property')}
-                className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-sm font-medium transition-all ${
-                  newConvMode === 'property'
-                    ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-900 dark:text-slate-100'
-                    : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                }`}
-              >
-                <Building2 size={14} />
-                By Property
-              </button>
+          {/* Selected users chips */}
+          {selectedUsers.length > 0 && (
+            <div className="flex flex-wrap gap-2 p-3 bg-slate-50 dark:bg-slate-700/50 rounded-xl">
+              {selectedUsers.map(u => (
+                <span key={u.id} className="inline-flex items-center gap-1.5 bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 text-xs font-medium px-2.5 py-1.5 rounded-full">
+                  <Avatar name={`${u.firstName} ${u.lastName}`} size="xs" />
+                  {u.firstName} {u.lastName}
+                  <button onClick={() => toggleUser(u)} className="hover:text-red-500 ml-0.5">
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
             </div>
           )}
 
-          {/* ── Person mode ── */}
-          {newConvMode === 'person' && (
-            <>
-              <p className="text-sm text-slate-500">Select one or more people to message:</p>
-
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  autoFocus
-                  placeholder="Search by name, email or role..."
-                  value={userSearch}
-                  onChange={e => setUserSearch(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2.5 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400"
-                />
-                {userSearch && (
-                  <button onClick={() => setUserSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                    <X size={14} />
-                  </button>
-                )}
+          {/* Live search input */}
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search by name, email or role..."
+              value={userSearch}
+              onChange={e => setUserSearch(e.target.value)}
+              autoFocus
+              className="w-full pl-10 pr-10 py-2.5 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400"
+            />
+            {searching && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                <div className="w-4 h-4 border-2 border-primary-400 border-t-transparent rounded-full animate-spin" />
               </div>
+            )}
+            {userSearch && !searching && (
+              <button onClick={() => setUserSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                <X size={14} />
+              </button>
+            )}
+          </div>
 
-              {selectedParticipants.length > 0 && (
-                <p className="text-xs text-primary-600 font-medium">
-                  {selectedParticipants.length} person{selectedParticipants.length > 1 ? 's' : ''} selected
-                </p>
-              )}
-
-              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                {filteredUsers.length === 0 ? (
-                  <p className="text-sm text-slate-400 text-center py-4">
-                    {userSearch ? `No results for "${userSearch}"` : 'No other users found'}
-                  </p>
-                ) : filteredUsers.map(u => {
-                  const isSelected = selectedParticipants.includes(u.id);
-                  return (
-                    <button
-                      key={u.id}
-                      onClick={() => setSelectedParticipants(prev =>
-                        isSelected ? prev.filter(id => id !== u.id) : [...prev, u.id]
-                      )}
-                      className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${
-                        isSelected
-                          ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                          : 'border-slate-200 dark:border-slate-600 hover:border-slate-300 dark:hover:border-slate-500'
-                      }`}
-                    >
-                      <Avatar name={`${u.firstName} ${u.lastName}`} src={u.avatar} size="sm" />
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{u.firstName} {u.lastName}</p>
-                        <p className="text-xs text-slate-400 capitalize">{u.role.replace('_', ' ')} · {u.email}</p>
-                      </div>
-                      {isSelected && <span className="text-primary-600 font-bold text-base flex-shrink-0">✓</span>}
-                    </button>
-                  );
-                })}
+          {/* Search results */}
+          <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-600 divide-y divide-slate-100 dark:divide-slate-700">
+            {!userSearch.trim() ? (
+              <div className="px-4 py-8 text-center text-sm text-slate-400">
+                Start typing to search for people to message
               </div>
-            </>
-          )}
-
-          {/* ── Property mode ── */}
-          {newConvMode === 'property' && (
-            <>
-              <p className="text-sm text-slate-500">Select a property, then choose which tenants to message:</p>
-
-              {/* Step 1 — pick a property */}
-              <div className="space-y-2">
-                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Step 1 — Property</p>
-                <div className="relative">
-                  <Building2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search properties..."
-                    value={propertySearch}
-                    onChange={e => setPropertySearch(e.target.value)}
-                    className="w-full pl-9 pr-8 py-2.5 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400"
-                  />
-                  {propertySearch && (
-                    <button onClick={() => setPropertySearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                  {filteredProperties.length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-3">
-                      {propertySearch ? `No properties matching "${propertySearch}"` : 'No managed properties found'}
-                    </p>
-                  ) : filteredProperties.map(p => {
-                    const isSelected = selectedPropertyId === p.id;
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() => {
-                          setSelectedPropertyId(p.id);
-                          setSelectedTenantIds([]);
-                          setTenantSearch('');
-                        }}
-                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${
-                          isSelected
-                            ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                            : 'border-slate-200 dark:border-slate-600 hover:border-slate-300 dark:hover:border-slate-500'
-                        }`}
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-600 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {p.photos[0]
-                            ? <img src={p.photos[0]} alt="" className="w-full h-full object-cover" />
-                            : <Building2 size={14} className="text-slate-400" />
-                          }
+            ) : searching ? (
+              <div className="px-4 py-6 text-center text-sm text-slate-400">Searching...</div>
+            ) : searchResults.length === 0 ? (
+              <div className="px-4 py-6 text-center text-sm text-slate-400">
+                No users found for "{userSearch}"
+              </div>
+            ) : (
+              searchResults.map(u => {
+                const isSelected = !!selectedUsers.find(x => x.id === u.id);
+                return (
+                  <button
+                    key={u.id}
+                    onClick={() => toggleUser(u)}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                      isSelected
+                        ? 'bg-primary-50 dark:bg-primary-900/20'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'
+                    }`}
+                  >
+                    <Avatar name={`${u.firstName} ${u.lastName}`} size="sm" className="flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {u.firstName} {u.lastName}
+                      </p>
+                      <p className="text-xs text-slate-400 truncate">{u.email}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <Badge variant="gray" className="text-xs capitalize">{u.role.replace('_', ' ')}</Badge>
+                      {isSelected && (
+                        <div className="w-5 h-5 bg-primary-500 rounded-full flex items-center justify-center">
+                          <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm truncate">{p.title}</p>
-                          <p className="text-xs text-slate-400 truncate">{p.district} · {p.status}</p>
-                        </div>
-                        {isSelected && <span className="text-primary-600 font-bold flex-shrink-0">✓</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Step 2 — pick tenants (only shown once a property is selected) */}
-              {selectedPropertyId && (
-                <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Step 2 — Tenants</p>
-                    {filteredTenants.length > 1 && (
-                      <button
-                        onClick={toggleSelectAllTenants}
-                        className="text-xs text-primary-600 font-medium hover:underline"
-                      >
-                        {allTenantsSelected ? 'Deselect all' : 'Select all'}
-                      </button>
-                    )}
-                  </div>
-
-                  {tenantsInProperty.length > 1 && (
-                    <div className="relative">
-                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        placeholder="Search tenants..."
-                        value={tenantSearch}
-                        onChange={e => setTenantSearch(e.target.value)}
-                        className="w-full pl-9 pr-8 py-2 text-sm bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 text-slate-900 dark:text-slate-100 placeholder-slate-400"
-                      />
-                      {tenantSearch && (
-                        <button onClick={() => setTenantSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                          <X size={14} />
-                        </button>
                       )}
                     </div>
-                  )}
+                  </button>
+                );
+              })
+            )}
+          </div>
 
-                  {selectedTenantIds.length > 0 && (
-                    <p className="text-xs text-primary-600 font-medium">
-                      {selectedTenantIds.length} tenant{selectedTenantIds.length > 1 ? 's' : ''} selected
-                    </p>
-                  )}
-
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                    {filteredTenants.length === 0 ? (
-                      <div className="text-center py-4">
-                        <p className="text-sm text-slate-400">
-                          {tenantSearch
-                            ? `No tenants matching "${tenantSearch}"`
-                            : 'No tenants assigned to this property yet'}
-                        </p>
-                        {!tenantSearch && (
-                          <p className="text-xs text-slate-300 dark:text-slate-600 mt-1">Assign a tenant from the property detail page</p>
-                        )}
-                      </div>
-                    ) : filteredTenants.map(u => {
-                      const isSelected = selectedTenantIds.includes(u.id);
-                      return (
-                        <button
-                          key={u.id}
-                          onClick={() => setSelectedTenantIds(prev =>
-                            isSelected ? prev.filter(id => id !== u.id) : [...prev, u.id]
-                          )}
-                          className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${
-                            isSelected
-                              ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20'
-                              : 'border-slate-200 dark:border-slate-600 hover:border-slate-300 dark:hover:border-slate-500'
-                          }`}
-                        >
-                          <Avatar name={`${u.firstName} ${u.lastName}`} src={u.avatar} size="sm" />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{u.firstName} {u.lastName}</p>
-                            <p className="text-xs text-slate-400">{u.email}</p>
-                          </div>
-                          {isSelected && <span className="text-primary-600 font-bold flex-shrink-0">✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Helper hint when no property selected yet */}
-              {!selectedPropertyId && filteredProperties.length > 0 && (
-                <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-50 dark:bg-slate-700/50 rounded-xl p-3">
-                  <ChevronDown size={14} className="flex-shrink-0" />
-                  Pick a property above to see its tenants
-                </div>
-              )}
-            </>
+          {selectedUsers.length > 0 && (
+            <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
+              {selectedUsers.length === 1
+                ? `1 person selected — will start a direct message`
+                : `${selectedUsers.length} people selected — will create a group chat`}
+            </p>
           )}
         </div>
       </Modal>
