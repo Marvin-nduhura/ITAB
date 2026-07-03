@@ -110,7 +110,40 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
     setLoading(true);
     try {
       const { paymentsApi } = await import('../lib/api');
-      const ref = `${payMethod === 'mtn_momo' ? 'MTN' : payMethod === 'airtel_money' ? 'AIR' : 'CARD'}-${Date.now()}`;
+      const ref = `${payMethod === 'mtn_momo' ? 'MTN' : payMethod === 'airtel_money' ? 'AIR' : payMethod === 'cash' ? 'CASH' : 'CARD'}-${Date.now()}`;
+
+      // Cash — record directly as completed, no PIN/USSD needed
+      if (payMethod === 'cash') {
+        const rentPeriodStr = payMode === 'advance'
+          ? (() => {
+              const months = getAdvanceMonths();
+              return months.length > 1 ? `${months[0]} – ${months[months.length - 1]}` : balance.rentPeriod;
+            })()
+          : balance.rentPeriod;
+        await paymentsApi.payRent({
+          propertyId: balance.propertyId,
+          propertyTitle: balance.propertyTitle,
+          amount: amountToPay,
+          method: 'cash',
+          reference: ref,
+          rentPeriod: rentPeriodStr,
+          isPartial: isPartialPayment,
+          status: 'completed',
+        });
+        setLoading(false);
+        onClose();
+        const pLabel = balance.rentPeriod
+          ? new Date(balance.rentPeriod + '-01').toLocaleDateString('en-UG', { month: 'long', year: 'numeric' })
+          : balance.rentPeriod;
+        if (payMode === 'advance') {
+          const months = getAdvanceMonths();
+          const range = months.length > 1 ? `${months[0]} – ${months[months.length - 1]}` : months[0];
+          toast.success(`✅ Cash payment of ${formatCurrency(amountToPay)} recorded for ${range}!`);
+        } else {
+          toast.success(`✅ Cash payment of ${formatCurrency(amountToPay)} recorded for ${pLabel}!`);
+        }
+        return;
+      }
 
       if (payMethod === 'mtn_momo') {
         await paymentsApi.initMTN({ amount: amountToPay, phone, type: 'rent', propertyId: balance.propertyId, reference: ref });
@@ -119,6 +152,16 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
       }
 
       if (payMethod === 'mtn_momo' || payMethod === 'airtel_money') {
+        // Build rent period string: for advance, show "2024-07 to 2024-09" range
+        const rentPeriodStr = payMode === 'advance'
+          ? (() => {
+              const months = getAdvanceMonths();
+              if (months.length <= 1) return balance.rentPeriod;
+              // Store as human label so it's readable everywhere
+              return `${months[0]} – ${months[months.length - 1]}`;
+            })()
+          : balance.rentPeriod;
+
         // Record payment as pending — callback will update to completed
         await paymentsApi.payRent({
           propertyId: balance.propertyId,
@@ -126,7 +169,7 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
           amount: amountToPay,
           method: payMethod,
           reference: ref,
-          rentPeriod: balance.rentPeriod,
+          rentPeriod: rentPeriodStr,
           isPartial: isPartialPayment,
           status: 'pending',
         });
@@ -140,12 +183,20 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
         setAwaitingPin(false);
         if (result.status === 'completed') {
           onClose();
+          // Build human-readable period label
+          const pLabel = balance.rentPeriod
+            ? new Date(balance.rentPeriod + '-01').toLocaleDateString('en-UG', { month: 'long', year: 'numeric' })
+            : balance.rentPeriod;
           if (payMode === 'advance') {
-            toast.success(`🎉 ${advanceMonths} months paid in advance!${advanceDiscount > 0 ? ` You saved ${formatCurrency(advanceSaving)}!` : ''}`);
+            const months = getAdvanceMonths();
+            const range = months.length > 1
+              ? `${months[0]} – ${months[months.length - 1]}`
+              : months[0];
+            toast.success(`🎉 ${advanceMonths} month${advanceMonths > 1 ? 's' : ''} paid in advance! (${range})${advanceDiscount > 0 ? ` You saved ${formatCurrency(advanceSaving)}!` : ''}`);
           } else if (isPartialPayment) {
-            toast.success(`✅ Partial payment of ${formatCurrency(amountToPay)} confirmed! Remaining: ${formatCurrency(remaining - amountToPay)}`);
+            toast.success(`✅ Partial payment of ${formatCurrency(amountToPay)} confirmed for ${pLabel}! Remaining: ${formatCurrency(remaining - amountToPay)}`);
           } else {
-            toast.success(`🎉 Rent fully paid for ${balance.rentPeriod}!`);
+            toast.success(`🎉 Rent fully paid for ${pLabel}!`);
           }
         } else {
           setPinTimeout(true);
@@ -153,13 +204,19 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
         }
       } else {
         // Card — record as completed directly
+        const rentPeriodStr = payMode === 'advance'
+          ? (() => {
+              const months = getAdvanceMonths();
+              return months.length > 1 ? `${months[0]} – ${months[months.length - 1]}` : balance.rentPeriod;
+            })()
+          : balance.rentPeriod;
         await paymentsApi.payRent({
           propertyId: balance.propertyId,
           propertyTitle: balance.propertyTitle,
           amount: amountToPay,
           method: payMethod,
           reference: ref,
-          rentPeriod: balance.rentPeriod,
+          rentPeriod: rentPeriodStr,
           isPartial: isPartialPayment,
         });
         setLoading(false);
@@ -368,11 +425,12 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
         {/* Payment method */}
         <div>
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment method</p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {[
               { value: 'mtn_momo',     label: 'MTN MoMo',    color: 'bg-yellow-400' },
               { value: 'airtel_money', label: 'Airtel Money', color: 'bg-red-500'    },
               { value: 'card',         label: 'Card',         color: 'bg-blue-500'   },
+              { value: 'cash',         label: 'Cash',         color: 'bg-green-600'  },
             ].map(m => (
               <button key={m.value} onClick={() => setPayMethod(m.value as PaymentMethod)}
                 className={`p-3 rounded-xl border-2 text-center transition-all ${payMethod === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
@@ -436,8 +494,61 @@ export function PaymentsPage() {
 
   // Filter payments to only what this user is allowed to see
   const visiblePayments = filterPaymentsForUser(allPayments, user, allProperties);
-  // Rent balances — computed from payments (no separate mock needed)
-  const visibleBalances: RentBalance[] = [];
+
+  // ── Build rent balances from the tenant's rented property + payment history ─
+  // This is what powers the "Pay Rent" button and balance cards.
+  const visibleBalances: RentBalance[] = (() => {
+    if (user?.role !== 'tenant') return [];
+
+    // Find the property this tenant is renting
+    const rentedProp = allProperties.find(
+      p => p.tenantId === user.id && p.status === 'rented'
+    );
+    if (!rentedProp) return [];
+
+    // Current month period "YYYY-MM"
+    const now = new Date();
+    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const dueDate = new Date(now.getFullYear(), now.getMonth(), 5).toISOString(); // due on the 5th
+
+    // All completed rent payments for this period
+    const periodPayments = visiblePayments.filter(p =>
+      (p.type === 'rent' || p.type === 'rent_partial') &&
+      p.propertyId === rentedProp.id &&
+      p.rentPeriod === currentPeriod
+    );
+
+    const totalPaid = periodPayments
+      .filter(p => p.status === 'completed')
+      .reduce((s, p) => s + p.amount, 0);
+
+    // Find inspection credit (first month only — if an inspection fee was paid and credited)
+    const inspCredit = periodPayments.find(p => p.inspectionCreditApplied && p.inspectionCreditApplied > 0)
+      ?.inspectionCreditApplied ?? 0;
+
+    const totalDue = rentedProp.rentPrice - inspCredit;
+    const balance  = Math.max(0, totalDue - totalPaid);
+
+    const rentBalance: RentBalance = {
+      id: `bal-${rentedProp.id}-${currentPeriod}`,
+      propertyId:     rentedProp.id,
+      propertyTitle:  rentedProp.title,
+      tenantId:       user.id,
+      rentPeriod:     currentPeriod,
+      totalDue,
+      totalPaid,
+      balance,
+      inspectionCredit: inspCredit,
+      isFullyPaid: balance <= 0,
+      dueDate,
+      payments: periodPayments,
+      lateFeeApplied: 0,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+
+    return [rentBalance];
+  })();
 
   const filtered = visiblePayments.filter(p => {
     const matchType = !filterType || p.type === filterType || (filterType === 'rent' && p.type === 'rent_partial');
@@ -445,13 +556,22 @@ export function PaymentsPage() {
     return matchType && matchStatus;
   });
 
-  const totalPaid = visiblePayments.filter(p => p.status === 'completed').reduce((s, p) => s + p.amount, 0);
-  const totalOutstanding = visibleBalances.filter(b => !b.isFullyPaid).reduce((s, b) => s + b.balance, 0);
+  const totalPaid       = visiblePayments.filter(p => p.status === 'completed').reduce((s, p) => s + p.amount, 0);
+  const totalOutstanding= visibleBalances.filter(b => !b.isFullyPaid).reduce((s, b) => s + b.balance, 0);
   const inspectionRevenue = visiblePayments.filter(p => p.type === 'inspection_fee' && p.status === 'completed').reduce((s, p) => s + p.amount, 0);
 
   const openPayModal = (balance: RentBalance) => {
     setSelectedBalance(balance);
     setShowPayModal(true);
+  };
+
+  // Open the pay modal — use existing balance or create one from the rented property
+  const handlePayRentClick = () => {
+    const unpaid = visibleBalances.find(b => !b.isFullyPaid);
+    if (unpaid) { openPayModal(unpaid); return; }
+    if (visibleBalances.length > 0) { openPayModal(visibleBalances[0]); return; }
+    // No rented property found — guide tenant
+    import('react-hot-toast').then(m => m.default.error('No active lease found. Book a property first.'));
   };
 
   const statusVariant = (s: string): 'green' | 'yellow' | 'red' | 'blue' | 'purple' => {
@@ -486,12 +606,7 @@ export function PaymentsPage() {
           <p className="text-sm text-slate-500 mt-0.5">Track all your transactions and rent balances</p>
         </div>
         {user?.role === 'tenant' && (
-          <Button icon={<CreditCard size={16} />} onClick={() => {
-            const unpaid = visibleBalances.find(b => !b.isFullyPaid);
-            if (unpaid || visibleBalances.length > 0) {
-              openPayModal(unpaid || visibleBalances[visibleBalances.length - 1]);
-            }
-          }}>
+          <Button icon={<CreditCard size={16} />} onClick={handlePayRentClick}>
             Pay Rent
           </Button>
         )}
@@ -680,7 +795,7 @@ export function PaymentsPage() {
                       <td className="px-4 py-3 text-slate-700 dark:text-slate-300 max-w-[140px] truncate">{p.propertyTitle}</td>
                       <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">
                         {p.rentPeriod
-                          ? new Date(p.rentPeriod + '-01').toLocaleDateString('en-UG', { month: 'short', year: 'numeric' })
+                          ? new Date(p.rentPeriod + '-01').toLocaleDateString('en-UG', { month: 'long', year: 'numeric' })
                           : '—'}
                       </td>
                       <td className="px-4 py-3">

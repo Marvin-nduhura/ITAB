@@ -69,7 +69,7 @@ export function MaintenancePage() {
     propertyTitle: string; amount: number; description: string;
   } | null>(null);
   const [vendorPhone, setVendorPhone] = useState('');
-  const [vendorPayMethod, setVendorPayMethod] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [vendorPayMethod, setVendorPayMethod] = useState<'mtn_momo' | 'airtel_money' | 'cash'>('mtn_momo');
   const [vendorPayLoading, setVendorPayLoading] = useState(false);
   const [vendorAwaitingPin, setVendorAwaitingPin] = useState(false);
   const [vendorPayRef, setVendorPayRef] = useState('');
@@ -213,14 +213,37 @@ export function MaintenancePage() {
     }
   };
 
-  // Handle vendor payment via mobile money
+  // Handle vendor payment via mobile money or cash
   const handlePayVendor = async () => {
     if (!showPayVendorModal) return;
-    if (!vendorPhone.trim()) { toast.error('Enter the vendor\'s mobile money phone number'); return; }
+    if ((vendorPayMethod === 'mtn_momo' || vendorPayMethod === 'airtel_money') && !vendorPhone.trim()) {
+      toast.error('Enter the vendor\'s mobile money phone number'); return;
+    }
 
     setVendorPayLoading(true);
     try {
-      const ref = `${vendorPayMethod === 'mtn_momo' ? 'MTN' : 'AIR'}-VND-${Date.now()}`;
+      const ref = `${vendorPayMethod === 'mtn_momo' ? 'MTN' : vendorPayMethod === 'airtel_money' ? 'AIR' : 'CASH'}-VND-${Date.now()}`;
+
+      // Cash — record directly, no PIN/USSD needed
+      if (vendorPayMethod === 'cash') {
+        payVendor({
+          vendorId: showPayVendorModal.vendorId,
+          vendorName: showPayVendorModal.vendorName,
+          jobId: showPayVendorModal.jobId,
+          propertyTitle: showPayVendorModal.propertyTitle,
+          amount: showPayVendorModal.amount,
+          description: showPayVendorModal.description,
+          managerId: user?.id || '',
+          managerName: `${user?.firstName} ${user?.lastName}`,
+          paymentMethod: 'cash',
+          receiverPhone: '',
+        });
+        setVendorPayLoading(false);
+        setShowPayVendorModal(null);
+        setVendorPhone('');
+        toast.success(`✅ Cash payment of ${formatCurrency(showPayVendorModal.amount)} recorded for ${showPayVendorModal.vendorName}!`);
+        return;
+      }
 
       // Initiate mobile money push to vendor's phone
       if (vendorPayMethod === 'mtn_momo') {
@@ -617,6 +640,7 @@ export function MaintenancePage() {
                     {[
                       { value: 'mtn_momo' as const,    label: 'MTN MoMo',    color: 'bg-yellow-400' },
                       { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500' },
+                      { value: 'cash' as const,         label: 'Cash',         color: 'bg-green-600' },
                     ].map(m => (
                       <button key={m.value} onClick={() => setVendorPayMethod(m.value)}
                         className={`p-3 rounded-xl border-2 text-center transition-all ${vendorPayMethod === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
@@ -627,6 +651,7 @@ export function MaintenancePage() {
                   </div>
                 </div>
 
+                {(vendorPayMethod === 'mtn_momo' || vendorPayMethod === 'airtel_money') && (
                 <Input
                   label="Vendor's Phone Number"
                   type="tel"
@@ -636,6 +661,13 @@ export function MaintenancePage() {
                   icon={<Smartphone size={15} />}
                   hint="The vendor will receive a mobile money credit on this number"
                 />
+                )}
+
+                {vendorPayMethod === 'cash' && (
+                  <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl text-xs text-green-700 dark:text-green-400">
+                    💵 Cash payment will be recorded immediately as completed. No phone number needed.
+                  </div>
+                )}
 
                 <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 text-xs text-blue-700 dark:text-blue-400">
                   💡 The vendor's phone number is pre-filled from their profile if available. Payment goes directly to their mobile money wallet.

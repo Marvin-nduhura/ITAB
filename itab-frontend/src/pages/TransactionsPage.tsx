@@ -101,6 +101,18 @@ function TransactionRow({ tx, currentUserId, isAdmin }: { tx: PlatformTransactio
           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
             <Badge variant="gray" className="text-xs">{cfg.label}</Badge>
             {tx.propertyTitle && <span className="text-xs text-slate-400 truncate max-w-[160px]">{tx.propertyTitle}</span>}
+            {tx.rentPeriod && (
+              <span className="text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded-full">
+                {(() => {
+                  try {
+                    return new Date(tx.rentPeriod + '-01').toLocaleDateString('en-UG', { month: 'short', year: 'numeric' });
+                  } catch { return tx.rentPeriod; }
+                })()}
+              </span>
+            )}
+            {tx.isPartial && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">partial</span>
+            )}
           </div>
         </div>
 
@@ -177,7 +189,18 @@ function TransactionRow({ tx, currentUserId, isAdmin }: { tx: PlatformTransactio
             <div className="flex justify-between"><span className="text-slate-500">Reference</span><span className="font-mono text-slate-700 dark:text-slate-300">{tx.reference}</span></div>
             <div className="flex justify-between"><span className="text-slate-500">Amount</span><span className="font-bold text-slate-900 dark:text-slate-100">{formatCurrency(tx.amount)}</span></div>
             {tx.inspectionCreditApplied && <div className="flex justify-between text-green-600"><span>Inspection credit</span><span>-{formatCurrency(tx.inspectionCreditApplied)}</span></div>}
-            {tx.rentPeriod && <div className="flex justify-between"><span className="text-slate-500">Rent period</span><span>{tx.rentPeriod}</span></div>}
+            {tx.rentPeriod && (
+              <div className="flex justify-between">
+                <span className="text-slate-500">Rent period</span>
+                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                  {(() => {
+                    try {
+                      return new Date(tx.rentPeriod + '-01').toLocaleDateString('en-UG', { month: 'long', year: 'numeric' });
+                    } catch { return tx.rentPeriod; }
+                  })()}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between"><span className="text-slate-500">Description</span><span className="text-right max-w-[200px]">{tx.description}</span></div>
             {tx.processedAt && <div className="flex justify-between"><span className="text-slate-500">Processed</span><span>{formatDate(tx.processedAt)}</span></div>}
           </div>

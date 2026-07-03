@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Briefcase, CheckCircle2, Star, MapPin,
-  DollarSign, Wrench, TrendingUp, Edit2, Save, Plus, X,
+  DollarSign, Wrench, TrendingUp, Edit2, Save, Plus, X, Clock, Smartphone,
 } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
@@ -13,6 +13,8 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
 import { useAuthStore } from '../../store/authStore';
 import { useVendorStore } from '../../store/vendorStore';
+import { usePaymentStore } from '../../store/paymentStore';
+import { paymentsApi } from '../../lib/api';
 import { formatCurrency, formatDate } from '../../lib/utils';
 import type { VendorCategory } from '../../types';
 import toast from 'react-hot-toast';
@@ -47,6 +49,7 @@ function StarRating({ rating, interactive = false, onChange }: { rating: number;
 export function VendorPortal() {
   const { user } = useAuthStore();
   const { vendors, jobs, ratings, updateVendor, acceptJob, startJob, completeJob } = useVendorStore();
+  const { getTransactionsByVendor } = usePaymentStore();
   const [tab, setTab] = useState<'overview' | 'jobs' | 'profile' | 'earnings'>('overview');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showCompleteModal, setShowCompleteModal] = useState<string | null>(null);
@@ -54,6 +57,15 @@ export function VendorPortal() {
   const [completionNotes, setCompletionNotes] = useState('');
   const [skillInput, setSkillInput] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Payment collection state — vendor requests payment after job completion
+  const [showRequestPayModal, setShowRequestPayModal] = useState<{
+    jobId: string; propertyTitle: string; amount: number;
+  } | null>(null);
+  const [myPhone, setMyPhone] = useState('');
+  const [payMethodPref, setPayMethodPref] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [awaitingPayment, setAwaitingPayment] = useState(false);
+  const [payRef, setPayRef] = useState('');
 
   // Find this vendor's profile — match by email, userId, or name
   const myVendor = vendors.find(v =>
@@ -94,11 +106,52 @@ export function VendorPortal() {
 
   const handleComplete = async () => {
     if (!showCompleteModal) return;
-    completeJob(showCompleteModal, Number(actualCost) || 0, completionNotes);
+    const job = myJobs.find(j => j.id === showCompleteModal);
+    const cost = Number(actualCost) || 0;
+    completeJob(showCompleteModal, cost, completionNotes);
     setShowCompleteModal(null);
     setActualCost('');
     setCompletionNotes('');
-    toast.success('Job marked as completed!');
+    toast.success('Job marked as completed! The manager will be notified to process your payment.');
+
+    // Open payment-collection modal so vendor can receive payment immediately
+    if (job && cost > 0) {
+      // Pre-fill vendor's phone from their profile
+      if (myVendor?.phone) setMyPhone(myVendor.phone);
+      setTimeout(() => {
+        setShowRequestPayModal({
+          jobId: showCompleteModal,
+          propertyTitle: job.propertyTitle || '',
+          amount: cost,
+        });
+      }, 600);
+    }
+  };
+
+  // Vendor receives mobile money payment — polls for manager's push
+  const handleReceivePayment = async () => {
+    if (!showRequestPayModal || !myPhone.trim()) {
+      toast.error('Enter your mobile money phone number'); return;
+    }
+    setAwaitingPayment(true);
+    const ref = `${payMethodPref === 'mtn_momo' ? 'MTN' : 'AIR'}-VND-${Date.now()}`;
+    setPayRef(ref);
+    try {
+      // Poll — manager's "Pay Vendor" push will fire the callback and update status
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 30 });
+      setAwaitingPayment(false);
+      if (result.status === 'completed') {
+        setShowRequestPayModal(null);
+        setMyPhone('');
+        toast.success(`✅ ${formatCurrency(showRequestPayModal.amount)} received on ${myPhone}!`);
+      } else {
+        toast('Payment not received yet. Ask the manager to process it — it will arrive on your phone.', { icon: '⏳', duration: 6000 });
+        setShowRequestPayModal(null);
+      }
+    } catch {
+      setAwaitingPayment(false);
+      toast.error('Could not confirm payment. Contact your manager.');
+    }
   };
 
   const addSkill = () => {
@@ -299,28 +352,44 @@ export function VendorPortal() {
           {completedJobs.length === 0 ? (
             <EmptyState icon={<DollarSign size={28} />} title="No earnings yet" description="Complete jobs to see your earnings here." />
           ) : (
-            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 dark:bg-slate-800/50">
-                      {['Job', 'Property', 'Completed', 'Amount'].map(h => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                    {completedJobs.map(j => (
-                      <tr key={j.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
-                        <td className="px-4 py-3 font-medium text-slate-900 dark:text-slate-100">{j.title}</td>
-                        <td className="px-4 py-3 text-slate-500 text-xs">{j.propertyTitle}</td>
-                        <td className="px-4 py-3 text-slate-400 text-xs">{j.completedDate ? formatDate(j.completedDate) : '—'}</td>
-                        <td className="px-4 py-3 font-bold text-green-600">{j.actualCost ? formatCurrency(j.actualCost) : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            <div className="space-y-3">
+              {completedJobs.map((j, i) => {
+                // Check if this job has a completed vendor_payment transaction
+                const myTxs = myVendor ? getTransactionsByVendor(myVendor.id) : [];
+                const jobTx = myTxs.find(t => t.jobId === j.id && t.type === 'vendor_payment');
+                const isPaid = jobTx?.status === 'completed';
+                const isPending = jobTx?.status === 'pending';
+
+                return (
+                  <motion.div key={j.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
+                    className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{j.title}</p>
+                        <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
+                          <MapPin size={11} />{j.propertyTitle}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-0.5">{j.completedDate ? formatDate(j.completedDate) : '—'}</p>
+                        {jobTx && (
+                          <p className="text-xs text-slate-400 mt-0.5 font-mono">ref: {jobTx.reference}</p>
+                        )}
+                      </div>
+                      <div className="text-right flex-shrink-0 space-y-1">
+                        <p className="text-base font-bold text-green-600">
+                          {j.actualCost ? formatCurrency(j.actualCost) : '—'}
+                        </p>
+                        {isPaid ? (
+                          <Badge variant="green">✓ Paid</Badge>
+                        ) : isPending ? (
+                          <Badge variant="yellow">⏳ Payment Pending</Badge>
+                        ) : (
+                          <Badge variant="gray">Awaiting Payment</Badge>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -398,9 +467,98 @@ export function VendorPortal() {
       <Modal open={!!showCompleteModal} onClose={() => setShowCompleteModal(null)} title="Complete Job"
         footer={<><Button variant="secondary" onClick={() => setShowCompleteModal(null)}>Cancel</Button><Button onClick={handleComplete} icon={<CheckCircle2 size={14} />}>Mark Complete</Button></>}>
         <div className="space-y-4">
+          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-3 text-xs text-green-700 dark:text-green-400">
+            💡 Once you mark the job complete, the manager will be prompted to pay you via mobile money. Make sure your phone number is correct in your profile.
+          </div>
           <Input label="Actual Cost (UGX)" type="number" placeholder="Enter the final cost" value={actualCost} onChange={e => setActualCost(e.target.value)} />
           <Textarea label="Completion Notes" placeholder="Describe what was done, materials used, etc." value={completionNotes} onChange={e => setCompletionNotes(e.target.value)} rows={3} />
         </div>
+      </Modal>
+
+      {/* Receive Payment Modal */}
+      <Modal
+        open={!!showRequestPayModal}
+        onClose={awaitingPayment ? undefined : () => { setShowRequestPayModal(null); setMyPhone(''); setAwaitingPayment(false); }}
+        title="Receive Payment"
+        size="sm"
+        footer={
+          awaitingPayment ? (
+            <div className="w-full flex flex-col items-center gap-2 py-1">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for manager to send payment...</span>
+              </div>
+            </div>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => { setShowRequestPayModal(null); setMyPhone(''); }}>
+                Later
+              </Button>
+              <Button onClick={handleReceivePayment} icon={<Smartphone size={14} />}>
+                I'm ready to receive
+              </Button>
+            </>
+          )
+        }
+      >
+        {showRequestPayModal && (
+          <div className="space-y-4">
+            {awaitingPayment ? (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                className="flex flex-col items-center gap-3 p-5 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+                <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <div>
+                  <p className="font-bold text-primary-800 dark:text-primary-300">Waiting for payment...</p>
+                  <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                    When the manager sends payment, <strong>{formatCurrency(showRequestPayModal.amount)}</strong> will arrive on <strong>{myPhone}</strong>.
+                  </p>
+                  <p className="text-xs text-slate-400 mt-2">ref: {payRef}</p>
+                </div>
+              </motion.div>
+            ) : (
+              <>
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-4">
+                  <p className="font-semibold text-slate-900 dark:text-slate-100">
+                    {showRequestPayModal.propertyTitle}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-0.5">Job payment due</p>
+                  <p className="text-2xl font-bold text-green-600 mt-2">{formatCurrency(showRequestPayModal.amount)}</p>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Receive via</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: 'mtn_momo' as const,    label: 'MTN MoMo',    color: 'bg-yellow-400' },
+                      { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500' },
+                    ].map(m => (
+                      <button key={m.value} onClick={() => setPayMethodPref(m.value)}
+                        className={`p-3 rounded-xl border-2 text-center transition-all ${payMethodPref === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
+                        <div className={`w-7 h-7 ${m.color} rounded-full mx-auto mb-1`} />
+                        <p className="text-xs font-medium text-slate-700 dark:text-slate-300">{m.label}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <Input
+                  label="Your Phone Number"
+                  type="tel"
+                  placeholder="07XX XXX XXX"
+                  value={myPhone}
+                  onChange={e => setMyPhone(e.target.value)}
+                  icon={<Smartphone size={15} />}
+                  hint="Payment will be sent to this number once the manager approves"
+                />
+
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 text-xs text-blue-700 dark:text-blue-400 flex items-start gap-2">
+                  <Clock size={14} className="flex-shrink-0 mt-0.5" />
+                  <span>The manager will process your payment from their dashboard. You'll receive a mobile money notification when it's sent.</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

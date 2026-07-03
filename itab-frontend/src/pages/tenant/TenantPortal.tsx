@@ -3,8 +3,9 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import {
   Home, Heart, Search, FileText, LogOut, Bell, Scale,
-  CheckCircle2, X, Plus, Trash2, RefreshCw, DollarSign,
+  CheckCircle2, X, Plus, Trash2, RefreshCw, DollarSign, Smartphone, Banknote, Info,
 } from 'lucide-react';
+import { AnimatePresence } from 'framer-motion';
 import { Button } from '../../components/ui/Button';
 import { Badge } from '../../components/ui/Badge';
 import { Modal } from '../../components/ui/Modal';
@@ -12,7 +13,8 @@ import { Input, Select, Textarea } from '../../components/ui/Input';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { usePropertyStore } from '../../store/propertyStore';
 import { useAuthStore } from '../../store/authStore';
-import { noticesApi } from '../../lib/api';
+import { useDataStore } from '../../store/dataStore';
+import { noticesApi, paymentsApi } from '../../lib/api';
 import { formatCurrency, formatDate, amenityIcons, DISTRICTS } from '../../lib/utils';
 import { downloadLease } from '../../lib/download';
 import toast from 'react-hot-toast';
@@ -28,6 +30,7 @@ interface SavedSearch {
 export function TenantPortal() {
   const { properties } = usePropertyStore();
   const { user } = useAuthStore();
+  const { payments: allPayments } = useDataStore();
   const navigate = useNavigate();
 
   const [tab, setTab] = useState<'lease' | 'favorites' | 'searches' | 'compare' | 'moveout' | 'renewal'>('lease');
@@ -47,13 +50,118 @@ export function TenantPortal() {
   const [renewalLoading, setRenewalLoading] = useState(false);
   const [renewalSubmitted, setRenewalSubmitted] = useState(false);
 
+  // ── Inline Pay Rent modal state (mirrors PaymentsPage modal) ──────────────
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [payMethod, setPayMethod] = useState<'mtn_momo' | 'airtel_money' | 'card' | 'cash'>('mtn_momo');
+  const [payPhone, setPayPhone] = useState(user?.phone || '');
+  const [payLoading, setPayLoading] = useState(false);
+  const [awaitingPin, setAwaitingPin] = useState(false);
+  const [payRef, setPayRef] = useState('');
+  const [payTimedOut, setPayTimedOut] = useState(false);
+
   const favoriteProperties = properties.filter(p => favorites.includes(p.id));
-  const compareProperties = properties.filter(p => compareList.includes(p.id));
-  // Derive current lease from payments — find the rented property for this user
-  const rentedProperty = properties.find(p => p.status === 'rented');
-  const currentProperty = rentedProperty;
-  // Outstanding balance computed server-side in production
-  const outstandingBalance = 0;
+  const compareProperties  = properties.filter(p => compareList.includes(p.id));
+
+  // Find the property this tenant is renting
+  const currentProperty = properties.find(
+    p => p.tenantId === user?.id && p.status === 'rented'
+  ) ?? properties.find(p => p.status === 'rented') ?? null;
+
+  // Compute real outstanding balance from payment history
+  const now = new Date();
+  const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const periodPayments = allPayments.filter(p =>
+    (p.type === 'rent' || p.type === 'rent_partial') &&
+    p.propertyId === currentProperty?.id &&
+    p.rentPeriod === currentPeriod &&
+    p.status === 'completed'
+  );
+  const paidThisMonth   = periodPayments.reduce((s, p) => s + p.amount, 0);
+  const inspCredit      = periodPayments.find(p => (p.inspectionCreditApplied ?? 0) > 0)?.inspectionCreditApplied ?? 0;
+  const monthlyRent     = currentProperty?.rentPrice ?? 0;
+  const totalDue        = Math.max(0, monthlyRent - inspCredit);
+  const outstandingBalance = Math.max(0, totalDue - paidThisMonth);
+
+  const periodLabel = new Date(currentPeriod + '-01').toLocaleDateString('en-UG', { month: 'long', year: 'numeric' });
+
+  // ── Pay Rent handler ──────────────────────────────────────────────────────
+  const handlePayRent = async () => {
+    if (!currentProperty) { toast.error('No active lease found'); return; }
+    if ((payMethod === 'mtn_momo' || payMethod === 'airtel_money') && !payPhone.trim()) {
+      toast.error('Enter your phone number to receive the PIN prompt'); return;
+    }
+    if (outstandingBalance <= 0) { toast('Rent is fully paid for ' + periodLabel + '! 🎉'); return; }
+
+    setPayLoading(true);
+    try {
+      const ref = `${payMethod === 'mtn_momo' ? 'MTN' : payMethod === 'airtel_money' ? 'AIR' : payMethod === 'cash' ? 'CASH' : 'CARD'}-${Date.now()}`;
+
+      // Cash payment — record directly as completed, no PIN needed
+      if (payMethod === 'cash') {
+        await paymentsApi.payRent({
+          propertyId: currentProperty.id,
+          propertyTitle: currentProperty.title,
+          amount: outstandingBalance,
+          method: 'cash',
+          reference: ref,
+          rentPeriod: currentPeriod,
+          isPartial: false,
+          landlordId: currentProperty.landlordId,
+          status: 'completed',
+        });
+        setPayLoading(false);
+        setShowPayModal(false);
+        toast.success(`✅ Cash payment of ${formatCurrency(outstandingBalance)} recorded for ${periodLabel}!`);
+        return;
+      }
+
+      if (payMethod === 'mtn_momo') {
+        await paymentsApi.initMTN({ amount: outstandingBalance, phone: payPhone, type: 'rent', propertyId: currentProperty.id, reference: ref });
+      } else if (payMethod === 'airtel_money') {
+        await paymentsApi.initAirtel({ amount: outstandingBalance, phone: payPhone, type: 'rent', propertyId: currentProperty.id, reference: ref });
+      }
+
+      // Record as pending — callback updates to completed
+      await paymentsApi.payRent({
+        propertyId: currentProperty.id,
+        propertyTitle: currentProperty.title,
+        amount: outstandingBalance,
+        method: payMethod,
+        reference: ref,
+        rentPeriod: currentPeriod,
+        isPartial: false,
+        landlordId: currentProperty.landlordId,
+        status: payMethod === 'card' ? 'completed' : 'pending',
+      });
+
+      setPayLoading(false);
+
+      if (payMethod === 'card') {
+        setShowPayModal(false);
+        toast.success(`🎉 Rent of ${formatCurrency(outstandingBalance)} paid for ${periodLabel}!`);
+        return;
+      }
+
+      setPayRef(ref);
+      setAwaitingPin(true);
+      setPayTimedOut(false);
+
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+      setAwaitingPin(false);
+
+      if (result.status === 'completed') {
+        setShowPayModal(false);
+        toast.success(`🎉 Rent of ${formatCurrency(outstandingBalance)} paid for ${periodLabel}!`);
+      } else {
+        setPayTimedOut(true);
+        toast.error('Payment not confirmed yet. Check your phone and try again.');
+      }
+    } catch {
+      setPayLoading(false);
+      setAwaitingPin(false);
+      toast.error('Payment failed. Check your connection and try again.');
+    }
+  };
 
   const removeFavorite = (id: string) => {
     setFavorites(prev => prev.filter(f => f !== id));
@@ -200,15 +308,52 @@ export function TenantPortal() {
                 </div>
               </div>
               {/* Current balance */}
-              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-card border border-slate-100 dark:border-slate-700 p-5">
-                <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-3">Current Rent Balance</h3>
-                <div className="flex items-center justify-between">
+              <div className={`bg-white dark:bg-slate-800 rounded-2xl shadow-card border p-5 ${outstandingBalance > 0 ? 'border-red-200 dark:border-red-900/40' : 'border-green-200 dark:border-green-900/40'}`}>
+                <h3 className="font-bold text-slate-900 dark:text-slate-100 mb-3">
+                  Current Rent Balance — <span className="text-slate-500 font-normal text-sm">{periodLabel}</span>
+                </h3>
+                <div className="flex items-center justify-between mb-3">
                   <div>
-                    <p className="text-2xl font-bold text-red-500">{formatCurrency(outstandingBalance)}</p>
-                    <p className="text-xs text-slate-400">Outstanding balance</p>
+                    {outstandingBalance > 0 ? (
+                      <>
+                        <p className="text-2xl font-bold text-red-500">{formatCurrency(outstandingBalance)}</p>
+                        <p className="text-xs text-slate-400">Outstanding this month</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-2xl font-bold text-green-600">✓ Fully Paid</p>
+                        <p className="text-xs text-slate-400">{formatCurrency(paidThisMonth)} paid for {periodLabel}</p>
+                      </>
+                    )}
                   </div>
-                  <Button onClick={() => navigate('/payments')} icon={<CheckCircle2 size={14} />}>Pay Now</Button>
+                  <Button
+                    onClick={() => outstandingBalance > 0 ? setShowPayModal(true) : toast('Rent is fully paid for ' + periodLabel + '! 🎉')}
+                    variant={outstandingBalance > 0 ? 'gold' : 'secondary'}
+                    icon={<CheckCircle2 size={14} />}
+                  >
+                    {outstandingBalance > 0 ? 'Pay Now' : 'All Paid ✓'}
+                  </Button>
                 </div>
+                {/* Progress bar */}
+                {monthlyRent > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs text-slate-400">
+                      <span>Paid: {formatCurrency(paidThisMonth)}</span>
+                      <span>Total: {formatCurrency(totalDue)}</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ${outstandingBalance <= 0 ? 'bg-green-500' : 'bg-amber-400'}`}
+                        style={{ width: `${Math.min(100, Math.round((paidThisMonth / totalDue) * 100))}%` }}
+                      />
+                    </div>
+                    {inspCredit > 0 && (
+                      <p className="text-xs text-green-600 flex items-center gap-1">
+                        <CheckCircle2 size={11} /> {formatCurrency(inspCredit)} inspection credit applied
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -481,6 +626,132 @@ export function TenantPortal() {
               { value: 'other', label: 'Other' },
             ]} />
           <Textarea label="Additional Notes" placeholder="Any additional information for your property manager..." value={moveoutForm.notes} onChange={e => setMoveoutForm(f => ({ ...f, notes: e.target.value }))} />
+        </div>
+      </Modal>
+
+      {/* ── Pay Rent Modal ────────────────────────────────────────────── */}
+      <Modal
+        open={showPayModal}
+        onClose={awaitingPin ? undefined : () => { setShowPayModal(false); setAwaitingPin(false); setPayTimedOut(false); }}
+        title={`Pay Rent — ${periodLabel}`}
+        size="sm"
+        footer={
+          awaitingPin ? (
+            <div className="w-full flex flex-col items-center gap-2 py-1">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for PIN confirmation...</span>
+              </div>
+              {payTimedOut && (
+                <Button size="sm" variant="secondary" onClick={() => { setAwaitingPin(false); setPayTimedOut(false); }}>
+                  Try Again
+                </Button>
+              )}
+            </div>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => setShowPayModal(false)}>Cancel</Button>
+              <Button loading={payLoading} onClick={handlePayRent} icon={<Banknote size={14} />}>
+                Pay {formatCurrency(outstandingBalance)}
+              </Button>
+            </>
+          )
+        }
+      >
+        <div className="space-y-4">
+          {/* PIN awaiting state */}
+          {awaitingPin && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+              className="flex flex-col items-center gap-3 p-5 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+              <div className="w-12 h-12 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+              <div>
+                <p className="font-bold text-primary-800 dark:text-primary-300">Check your phone!</p>
+                <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                  A {payMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} prompt was sent to <strong>{payPhone}</strong>.
+                </p>
+                <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                  Enter your PIN to pay <strong>{formatCurrency(outstandingBalance)}</strong>.
+                </p>
+                <p className="text-xs text-slate-400 mt-2">ref: {payRef}</p>
+              </div>
+            </motion.div>
+          )}
+
+          {!awaitingPin && (
+            <>
+              {/* Summary */}
+              <div className="bg-slate-50 dark:bg-slate-700/50 rounded-xl p-4 space-y-2">
+                <p className="font-semibold text-slate-900 dark:text-slate-100 text-sm">{currentProperty?.title}</p>
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>Period</span><span className="font-medium">{periodLabel}</span>
+                </div>
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>Monthly rent</span><span>{formatCurrency(monthlyRent)}</span>
+                </div>
+                {inspCredit > 0 && (
+                  <div className="flex justify-between text-xs text-green-600">
+                    <span>Inspection credit</span><span>-{formatCurrency(inspCredit)}</span>
+                  </div>
+                )}
+                {paidThisMonth > 0 && (
+                  <div className="flex justify-between text-xs text-slate-500">
+                    <span>Already paid</span><span>-{formatCurrency(paidThisMonth)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-bold text-sm text-slate-900 dark:text-slate-100 border-t border-slate-200 dark:border-slate-600 pt-2">
+                  <span>Paying now</span><span className="text-green-600">{formatCurrency(outstandingBalance)}</span>
+                </div>
+              </div>
+
+              {/* Method selector */}
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment method</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: 'mtn_momo'     as const, label: 'MTN MoMo',    color: 'bg-yellow-400' },
+                    { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500'    },
+                    { value: 'card'         as const, label: 'Card',         color: 'bg-blue-500'   },
+                    { value: 'cash'         as const, label: 'Cash',         color: 'bg-green-600'  },
+                  ].map(m => (
+                    <button key={m.value} onClick={() => setPayMethod(m.value)}
+                      className={`p-3 rounded-xl border-2 text-center transition-all ${payMethod === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
+                      <div className={`w-6 h-6 ${m.color} rounded-full mx-auto mb-1`} />
+                      <p className="text-xs font-medium text-slate-700 dark:text-slate-300">{m.label}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Phone input for mobile money */}
+              {(payMethod === 'mtn_momo' || payMethod === 'airtel_money') && (
+                <Input
+                  label={`${payMethod === 'mtn_momo' ? 'MTN' : 'Airtel'} Phone Number`}
+                  type="tel"
+                  placeholder="07XX XXX XXX"
+                  value={payPhone}
+                  onChange={e => setPayPhone(e.target.value)}
+                  icon={<Smartphone size={15} />}
+                  hint="You will receive a PIN prompt on this number"
+                />
+              )}
+
+              {/* Card note */}
+              {payMethod === 'card' && (
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl text-xs text-blue-700 dark:text-blue-400 flex gap-2">
+                  <Info size={14} className="flex-shrink-0 mt-0.5" />
+                  Card payments are processed securely. You'll be charged {formatCurrency(outstandingBalance)}.
+                </div>
+              )}
+
+              {/* Cash note */}
+              {payMethod === 'cash' && (
+                <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl text-xs text-green-700 dark:text-green-400 flex gap-2">
+                  <Banknote size={14} className="flex-shrink-0 mt-0.5" />
+                  Cash payment will be recorded immediately as completed.
+                </div>
+              )}
+            </>
+          )}
         </div>
       </Modal>
     </div>

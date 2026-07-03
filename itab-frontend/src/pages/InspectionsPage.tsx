@@ -29,7 +29,7 @@ interface PayInspFeeModalProps {
 }
 
 function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFeeModalProps) {
-  const [method, setMethod] = useState<'mtn_momo' | 'airtel_money'>('mtn_momo');
+  const [method, setMethod] = useState<'mtn_momo' | 'airtel_money' | 'cash'>('mtn_momo');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [awaitingPin, setAwaitingPin] = useState(false);
@@ -40,10 +40,22 @@ function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFee
   const fee = inspection.feeAmount || INSPECTION_FEE;
 
   const handlePay = async () => {
-    if (!phone.trim()) { toast.error('Enter your mobile money phone number'); return; }
+    if ((method === 'mtn_momo' || method === 'airtel_money') && !phone.trim()) {
+      toast.error('Enter your mobile money phone number'); return;
+    }
     setLoading(true);
     try {
-      const ref = `${method === 'mtn_momo' ? 'MTN' : 'AIR'}-INSP-${Date.now()}`;
+      const ref = `${method === 'mtn_momo' ? 'MTN' : method === 'airtel_money' ? 'AIR' : 'CASH'}-INSP-${Date.now()}`;
+
+      // Cash — record directly as completed, no USSD needed
+      if (method === 'cash') {
+        await inspectionsApi.pay(inspection.id, { method: 'cash', reference: ref, status: 'completed' });
+        setLoading(false);
+        onPaid();
+        onClose();
+        toast.success(`✅ Cash inspection fee of ${formatCurrency(fee)} recorded!`);
+        return;
+      }
 
       // Initiate mobile money — user gets USSD prompt on their phone
       if (method === 'mtn_momo') {
@@ -144,6 +156,7 @@ function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFee
                 {[
                   { value: 'mtn_momo' as const, label: 'MTN MoMo', color: 'bg-yellow-400' },
                   { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500' },
+                  { value: 'cash' as const, label: 'Cash', color: 'bg-green-600' },
                 ].map(m => (
                   <button key={m.value} onClick={() => setMethod(m.value)}
                     className={`p-3 rounded-xl border-2 text-center transition-all ${method === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
@@ -154,15 +167,23 @@ function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFee
               </div>
             </div>
 
-            <Input
-              label={`${method === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} Phone Number`}
-              type="tel"
-              placeholder="07XX XXX XXX"
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              icon={<Smartphone size={15} />}
-              hint="You will receive a PIN prompt on this number"
-            />
+            {(method === 'mtn_momo' || method === 'airtel_money') && (
+              <Input
+                label={`${method === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} Phone Number`}
+                type="tel"
+                placeholder="07XX XXX XXX"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                icon={<Smartphone size={15} />}
+                hint="You will receive a PIN prompt on this number"
+              />
+            )}
+
+            {method === 'cash' && (
+              <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl text-xs text-green-700 dark:text-green-400">
+                💵 Cash payment will be recorded immediately as completed. No phone number needed.
+              </div>
+            )}
 
             <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-xs text-amber-700 dark:text-amber-400">
               ⚠️ Inspection fees are <strong>non-refundable</strong>. The fee will be credited toward your first month's rent if you sign a lease.

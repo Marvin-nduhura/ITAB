@@ -10,11 +10,13 @@
     "db:setup": "node seed.js",
     "migrate": "node migrate.js",
     "test": "jest --runInBand --forceExit",
+    "test:live": "node tests/live-site.test.js",
     "test:payments": "jest --runInBand --forceExit --testPathPattern=payments"
   },
   "jest": {
     "testEnvironment": "node",
-    "testTimeout": 30000
+    "testTimeout": 30000,
+    "testPathIgnorePatterns": ["tests/live-site.test.js"]
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
