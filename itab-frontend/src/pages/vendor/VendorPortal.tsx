@@ -145,12 +145,12 @@ export function VendorPortal() {
         setMyPhone('');
         toast.success(`✅ ${formatCurrency(showRequestPayModal.amount)} received on ${myPhone}!`);
       } else {
-        toast('Payment not received yet. Ask the manager to process it — it will arrive on your phone.', { icon: '⏳', duration: 6000 });
+        toast.error('❌ Payment not received within 60 seconds. Ask the manager to process it again — it will arrive on your phone.');
         setShowRequestPayModal(null);
       }
     } catch {
       setAwaitingPayment(false);
-      toast.error('Could not confirm payment. Contact your manager.');
+      toast.error('❌ Payment failed. Check your connection and contact your manager.');
     }
   };
 

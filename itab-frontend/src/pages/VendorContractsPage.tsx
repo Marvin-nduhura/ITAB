@@ -164,12 +164,12 @@ export function VendorContractsPage() {
         }
       } else {
         setPayTimedOut(true);
-        toast.error('Payment not confirmed. The vendor should check their phone.');
+        toast.error('❌ Payment failed — PIN not confirmed. Check phone balance and try again.');
       }
     } catch {
       setPayingId(null);
       setPayAwaitingPin(false);
-      toast.error('Payment failed. Check your connection and try again.');
+      toast.error('❌ Payment failed. Check your connection or phone balance and try again.');
     }
   };
 

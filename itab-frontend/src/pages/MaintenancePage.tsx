@@ -281,12 +281,12 @@ export function MaintenancePage() {
         toast.success(`✅ ${formatCurrency(showPayVendorModal.amount)} sent to ${showPayVendorModal.vendorName} via ${vendorPayMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'}!`);
       } else {
         setVendorPayTimedOut(true);
-        toast.error('Payment not confirmed. The vendor should check their phone.');
+        toast.error('❌ Vendor payment failed — PIN not confirmed. Check phone balance and try again.');
       }
     } catch {
       setVendorPayLoading(false);
       setVendorAwaitingPin(false);
-      toast.error('Payment failed. Please try again.');
+      toast.error('❌ Payment failed. Check your connection or phone balance and try again.');
     }
   };
 

@@ -166,33 +166,73 @@ export function PropertyDetailPage() {
   };
 
   const handlePayment = async () => {
-    if (payMethod !== 'cash' && !phone) { toast.error('Please enter your phone number'); return; }
+    if ((payMethod === 'mtn_momo' || payMethod === 'airtel_money') && !phone) {
+      toast.error('Please enter your phone number to receive the PIN prompt');
+      return;
+    }
     setLoading(true);
     try {
       const { inspectionsApi, paymentsApi } = await import('../lib/api');
-      // 1. Book the inspection
+      const fee = INSPECTION_FEE; // use the system fee amount
+      const ref = `${payMethod === 'mtn_momo' ? 'MTN' : payMethod === 'airtel_money' ? 'AIR' : 'CASH'}-INSP-${Date.now()}`;
+
+      // 1. Book the inspection first
       const inspRes = await inspectionsApi.book({
         propertyId: property.id,
         scheduledDate: bookingDate,
         scheduledTime: bookingTime,
       });
       const insp = (inspRes.data as { data: { id: string } }).data;
-      // 2. Initiate payment
+
+      if (payMethod === 'cash') {
+        // Cash — record as pending, manager must confirm receipt
+        if (insp?.id) {
+          await inspectionsApi.pay(insp.id, { method: 'cash', reference: `CASH-${Date.now()}`, status: 'pending' });
+        }
+        setLoading(false);
+        setShowPayModal(false);
+        toast('🏠 Inspection booked! Pay cash to the property manager on the day of inspection. They will confirm receipt.', {
+          duration: 6000, icon: '💵',
+        });
+        return;
+      }
+
+      // 2. Initiate USSD push to tenant's phone — amount is the system fee
       if (payMethod === 'mtn_momo') {
-        await paymentsApi.initMTN({ amount: 100000, phone, type: 'inspection_fee', propertyId: property.id });
-      } else if (payMethod === 'airtel_money') {
-        await paymentsApi.initAirtel({ amount: 100000, phone, type: 'inspection_fee', propertyId: property.id });
+        await paymentsApi.initMTN({ amount: fee, phone, type: 'inspection_fee', propertyId: property.id, reference: ref });
+      } else {
+        await paymentsApi.initAirtel({ amount: fee, phone, type: 'inspection_fee', propertyId: property.id, reference: ref });
       }
-      // 3. Mark fee as paid
+
+      // 3. Record as pending — will be updated by callback
       if (insp?.id) {
-        await inspectionsApi.pay(insp.id, { method: payMethod, reference: `${payMethod.toUpperCase()}-${Date.now()}` });
+        await inspectionsApi.pay(insp.id, { method: payMethod, reference: ref, status: 'pending' });
       }
-      toast.success('🎉 Inspection booked! Check your email for confirmation.');
-    } catch {
-      toast.success('🎉 Inspection booked! Check your email for confirmation.');
-    } finally {
+
       setLoading(false);
-      setShowPayModal(false);
+      // 4. Show USSD waiting state — don't close modal yet
+      setPhone(phone); // keep phone
+      // Replace modal content with PIN waiting state
+      const network = payMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money';
+      toast(`📱 ${network} PIN prompt sent to ${phone}. Enter your PIN to confirm payment.`, { duration: 8000, icon: '⏳' });
+
+      // 5. Poll until callback confirms payment
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+
+      if (result.status === 'completed') {
+        // Mark fee as fully paid
+        if (insp?.id) {
+          await inspectionsApi.pay(insp.id, { method: payMethod, reference: ref, status: 'completed' });
+        }
+        setShowPayModal(false);
+        toast.success(`🎉 Inspection booked and payment confirmed! ${formatCurrency(fee)} paid via ${network}. You'll receive a confirmation shortly.`);
+      } else {
+        setShowPayModal(false);
+        toast.error('❌ Payment failed — PIN not confirmed within 60 seconds. Inspection is still booked but payment is pending.');
+      }
+    } catch {
+      setLoading(false);
+      toast.error('❌ Booking failed. Check your connection or phone balance and try again.');
     }
   };
 
@@ -656,8 +696,29 @@ export function PropertyDetailPage() {
       </Modal>
 
       {/* Payment Modal */}
-      <Modal open={showPayModal} onClose={() => setShowPayModal(false)} title="Pay Inspection Fee"
-        footer={<><Button variant="secondary" onClick={() => setShowPayModal(false)}>Cancel</Button><Button loading={loading} onClick={handlePayment} variant="gold">Pay {formatCurrency(INSPECTION_FEE)}</Button></>}>
+      <Modal open={showPayModal} onClose={loading ? () => {} : () => setShowPayModal(false)} title="Pay Inspection Fee"
+        footer={
+          loading ? (
+            <div className="w-full flex flex-col items-center gap-2 py-1">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {payMethod === 'cash' ? 'Booking inspection...' : 'Waiting for PIN confirmation...'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                {(payMethod === 'mtn_momo' || payMethod === 'airtel_money') && phone
+                  ? `Check your phone (${phone}) and enter your PIN`
+                  : ''}
+              </p>
+            </div>
+          ) : (
+            <><Button variant="secondary" onClick={() => setShowPayModal(false)}>Cancel</Button>
+            <Button loading={loading} onClick={handlePayment} variant="gold">
+              Pay {formatCurrency(INSPECTION_FEE)}
+            </Button></>
+          )
+        }>
         <div className="space-y-4">
           <div className="text-center py-2">
             <p className="text-3xl font-bold text-slate-900 dark:text-slate-100">{formatCurrency(INSPECTION_FEE)}</p>

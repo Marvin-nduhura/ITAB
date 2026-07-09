@@ -84,12 +84,12 @@ function PayInspectionFeeModal({ open, inspection, onClose, onPaid }: PayInspFee
         toast.success(`✅ Inspection fee of ${formatCurrency(fee)} paid! A USSD receipt was sent to ${phone}.`);
       } else {
         setTimedOut(true);
-        toast.error('Payment not confirmed. Please check your phone and try again.');
+        toast.error('❌ Payment failed — PIN not confirmed. Check your phone balance and try again.');
       }
     } catch {
       setLoading(false);
       setAwaitingPin(false);
-      toast.error('Payment failed. Check your connection and try again.');
+      toast.error('❌ Payment failed. Check your connection or phone balance and try again.');
     }
   };
 

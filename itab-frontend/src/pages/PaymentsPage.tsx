@@ -200,7 +200,7 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
           }
         } else {
           setPinTimeout(true);
-          toast.error('Payment not confirmed yet. Check your phone and try again if needed.');
+          toast.error('❌ Payment failed — PIN not confirmed within 60 seconds. Check your phone balance and try again.');
         }
       } else {
         // Card — record as completed directly
@@ -225,7 +225,8 @@ function PayRentModal({ open, onClose, balance }: PayRentModalProps) {
       }
     } catch {
       setLoading(false);
-      toast.error('Payment failed. Please check your connection and try again.');
+      setAwaitingPin(false);
+      toast.error('❌ Payment failed. Check your connection or phone balance and try again.');
     }
   };
 

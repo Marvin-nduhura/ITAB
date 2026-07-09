@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Pencil, Trash2, Tag, ImagePlus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, Tag, ImagePlus, ChevronLeft, ChevronRight, Smartphone } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { Modal } from '../ui/Modal';
@@ -298,11 +298,92 @@ export function UnitsSection({ property, isOwner }: UnitsSectionProps) {
     setShowBookModal(true);
   };
 
+  // ── Full booking + payment flow (mirrors PropertyDetailPage) ──────────────
+  const [bookingPayMethod, setBookingPayMethod] = useState<'mtn_momo' | 'airtel_money' | 'cash'>('mtn_momo');
+  const [bookingPhone, setBookingPhone] = useState('');
+  const [bookingPaying, setBookingPaying] = useState(false);
+  const [bookingStep, setBookingStep] = useState<'datetime' | 'payment' | 'awaiting_pin'>('datetime');
+
   const handleConfirmBooking = () => {
     if (!bookingDate || !bookingTime) { toast.error('Select a date and time'); return; }
-    toast.success(`🎉 Inspection booked for ${bookingUnit?.unitName}!`);
-    setShowBookModal(false);
-    setBookingUnit(null);
+    setBookingStep('payment');
+  };
+
+  const handlePayForUnit = async () => {
+    if (!bookingUnit) return;
+    if ((bookingPayMethod === 'mtn_momo' || bookingPayMethod === 'airtel_money') && !bookingPhone.trim()) {
+      toast.error('Enter your phone number to receive the PIN prompt'); return;
+    }
+    setBookingPaying(true);
+    try {
+      const { inspectionsApi, paymentsApi } = await import('../../lib/api');
+      const fee = bookingUnit.rentPrice; // unit inspection uses unit's rent as fee indicator, but standard is INSPECTION_FEE
+      // Use the standard inspection fee from system
+      const inspFee = 100000; // UGX 100,000 — same as property inspections
+      const ref = `${bookingPayMethod === 'mtn_momo' ? 'MTN' : bookingPayMethod === 'airtel_money' ? 'AIR' : 'CASH'}-UNIT-${Date.now()}`;
+
+      // 1. Book the inspection for this unit (notes carry the unit name)
+      const inspRes = await inspectionsApi.book({
+        propertyId: property.id,
+        scheduledDate: bookingDate,
+        scheduledTime: bookingTime,
+        notes: `Unit inspection: ${bookingUnit.unitName}`,
+      });
+      const insp = (inspRes.data as { data: { id: string } }).data;
+
+      if (bookingPayMethod === 'cash') {
+        if (insp?.id) {
+          await inspectionsApi.pay(insp.id, { method: 'cash', reference: `CASH-${Date.now()}`, status: 'pending' });
+        }
+        setBookingPaying(false);
+        setShowBookModal(false);
+        setBookingUnit(null);
+        setBookingStep('datetime');
+        toast('🏠 Unit inspection booked! Pay cash to the property manager on the day. They will confirm receipt.', {
+          duration: 6000, icon: '💵',
+        });
+        return;
+      }
+
+      // 2. Send USSD push to phone
+      if (bookingPayMethod === 'mtn_momo') {
+        await paymentsApi.initMTN({ amount: inspFee, phone: bookingPhone, type: 'inspection_fee', propertyId: property.id, reference: ref });
+      } else {
+        await paymentsApi.initAirtel({ amount: inspFee, phone: bookingPhone, type: 'inspection_fee', propertyId: property.id, reference: ref });
+      }
+
+      // 3. Record as pending
+      if (insp?.id) {
+        await inspectionsApi.pay(insp.id, { method: bookingPayMethod, reference: ref, status: 'pending' });
+      }
+
+      // 4. Show awaiting PIN state
+      setBookingStep('awaiting_pin');
+      setBookingPaying(false);
+
+      const network = bookingPayMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money';
+      toast(`📱 ${network} PIN prompt sent to ${bookingPhone}. Enter your PIN now.`, { duration: 8000, icon: '⏳' });
+
+      // 5. Poll for confirmation
+      const result = await paymentsApi.pollStatus(ref, { intervalMs: 3000, maxAttempts: 20 });
+
+      if (result.status === 'completed') {
+        if (insp?.id) {
+          await inspectionsApi.pay(insp.id, { method: bookingPayMethod, reference: ref, status: 'completed' });
+        }
+        setShowBookModal(false);
+        setBookingUnit(null);
+        setBookingStep('datetime');
+        toast.success(`🎉 ${bookingUnit.unitName} inspection confirmed! Payment received. You'll be contacted to arrange access.`);
+      } else {
+        setBookingStep('payment');
+        toast.error(`❌ Payment failed — PIN not confirmed within 60 seconds. Your inspection is booked but payment is still pending. Please try again.`);
+      }
+    } catch {
+      setBookingPaying(false);
+      setBookingStep('payment');
+      toast.error('❌ Payment failed. Check your connection or phone balance and try again.');
+    }
   };
 
   if (loading) {
@@ -452,33 +533,123 @@ export function UnitsSection({ property, isOwner }: UnitsSectionProps) {
         saving={modalSaving}
       />
 
-      {/* Book Unit Inspection Modal */}
-      <Modal open={showBookModal} onClose={() => setShowBookModal(false)} title="Book Unit Inspection"
+      {/* Book Unit Inspection Modal — full USSD payment flow */}
+      <Modal
+        open={showBookModal}
+        onClose={bookingStep === 'awaiting_pin' ? () => {} : () => { setShowBookModal(false); setBookingUnit(null); setBookingStep('datetime'); }}
+        title={bookingStep === 'datetime' ? 'Book Unit Inspection' : bookingStep === 'payment' ? 'Pay Inspection Fee' : 'Confirming Payment...'}
+        size="sm"
         footer={
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setShowBookModal(false)}>Cancel</Button>
-            <Button onClick={handleConfirmBooking}>Confirm Booking</Button>
-          </div>
+          bookingStep === 'awaiting_pin' ? (
+            <div className="w-full flex flex-col items-center gap-2 py-1">
+              <div className="flex items-center gap-3">
+                <div className="w-5 h-5 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Waiting for PIN confirmation...</span>
+              </div>
+              <p className="text-xs text-slate-400">Check your phone ({bookingPhone}) and enter your PIN</p>
+            </div>
+          ) : bookingStep === 'payment' ? (
+            <>
+              <Button variant="secondary" onClick={() => setBookingStep('datetime')}>← Back</Button>
+              <Button loading={bookingPaying} onClick={handlePayForUnit} icon={<span>💳</span>}>
+                Pay UGX 100,000
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => { setShowBookModal(false); setBookingUnit(null); }}>Cancel</Button>
+              <Button onClick={handleConfirmBooking}>Next: Pay →</Button>
+            </>
+          )
         }
       >
         <div className="space-y-4">
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
-            <p className="font-semibold text-blue-800 dark:text-blue-300 text-sm">{bookingUnit?.unitName}</p>
-            <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">{property.title} · {property.address}</p>
-          </div>
-          <Input label="Preferred Date" type="date" value={bookingDate}
-            onChange={e => setBookingDate(e.target.value)} min={new Date().toISOString().split('T')[0]} />
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Preferred Time</label>
-            <div className="grid grid-cols-3 gap-2">
-              {['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'].map(t => (
-                <button key={t} onClick={() => setBookingTime(t)}
-                  className={`py-2 rounded-xl text-sm font-medium border transition-all ${bookingTime === t ? 'bg-primary-600 text-white border-primary-600' : 'border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:border-primary-400'}`}>
-                  {t}
-                </button>
-              ))}
+          {/* Step: Date & Time */}
+          {bookingStep === 'datetime' && (
+            <>
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
+                <p className="font-semibold text-blue-800 dark:text-blue-300 text-sm">{bookingUnit?.unitName}</p>
+                <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">{property.title} · {property.address}</p>
+                <p className="text-xs text-blue-500 dark:text-blue-400 mt-1 font-medium">Rent: {formatCurrency(bookingUnit?.rentPrice || 0)}/mo</p>
+              </div>
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3 text-xs text-amber-700 dark:text-amber-400">
+                ⚠️ Inspection fee: <strong>UGX 100,000</strong> (non-refundable). Credited toward first rent if you take the unit.
+              </div>
+              <Input label="Preferred Date" type="date" value={bookingDate}
+                onChange={e => setBookingDate(e.target.value)} min={new Date().toISOString().split('T')[0]} />
+              <div>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Preferred Time</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {['09:00', '10:00', '11:00', '14:00', '15:00', '16:00'].map(t => (
+                    <button key={t} onClick={() => setBookingTime(t)}
+                      className={`py-2 rounded-xl text-sm font-medium border transition-all ${bookingTime === t ? 'bg-primary-600 text-white border-primary-600' : 'border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:border-primary-400'}`}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Step: Payment method */}
+          {bookingStep === 'payment' && (
+            <>
+              <div className="text-center py-1">
+                <p className="text-2xl font-bold text-slate-900 dark:text-slate-100">UGX 100,000</p>
+                <p className="text-xs text-slate-400 mt-1">Inspection fee for {bookingUnit?.unitName}</p>
+                <p className="text-xs text-slate-400">{bookingDate} at {bookingTime}</p>
+              </div>
+
+              {/* Method */}
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Payment method</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { value: 'mtn_momo' as const,    label: 'MTN MoMo',    color: 'bg-yellow-400' },
+                    { value: 'airtel_money' as const, label: 'Airtel Money', color: 'bg-red-500'   },
+                    { value: 'cash' as const,         label: 'Cash',         color: 'bg-green-600' },
+                  ].map(m => (
+                    <button key={m.value} onClick={() => setBookingPayMethod(m.value)}
+                      className={`p-3 rounded-xl border-2 text-center transition-all ${bookingPayMethod === m.value ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20' : 'border-slate-200 dark:border-slate-600'}`}>
+                      <div className={`w-7 h-7 ${m.color} rounded-full mx-auto mb-1`} />
+                      <p className="text-xs font-medium text-slate-700 dark:text-slate-300">{m.label}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {(bookingPayMethod === 'mtn_momo' || bookingPayMethod === 'airtel_money') && (
+                <Input
+                  label={`${bookingPayMethod === 'mtn_momo' ? 'MTN' : 'Airtel'} Phone Number`}
+                  type="tel" placeholder="07XX XXX XXX"
+                  value={bookingPhone} onChange={e => setBookingPhone(e.target.value)}
+                  hint="You will receive a PIN prompt on this number"
+                />
+              )}
+
+              {bookingPayMethod === 'cash' && (
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-3 text-xs text-green-700 dark:text-green-400">
+                  💵 Pay UGX 100,000 cash to the property manager on the inspection date. They will confirm receipt in the system.
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Step: Awaiting PIN */}
+          {bookingStep === 'awaiting_pin' && (
+            <div className="flex flex-col items-center gap-3 p-4 bg-primary-50 dark:bg-primary-900/20 border border-primary-200 dark:border-primary-700 rounded-2xl text-center">
+              <div className="w-14 h-14 border-4 border-primary-500 border-t-transparent rounded-full animate-spin" />
+              <div>
+                <p className="font-bold text-primary-800 dark:text-primary-300 text-base">Check your phone!</p>
+                <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                  A {bookingPayMethod === 'mtn_momo' ? 'MTN MoMo' : 'Airtel Money'} prompt was sent to <strong>{bookingPhone}</strong>.
+                </p>
+                <p className="text-sm text-primary-600 dark:text-primary-400 mt-1">
+                  Enter your PIN to confirm <strong>UGX 100,000</strong> for {bookingUnit?.unitName}.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </Modal>
     </>

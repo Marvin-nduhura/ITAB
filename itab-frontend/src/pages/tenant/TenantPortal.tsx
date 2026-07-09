@@ -150,12 +150,12 @@ export function TenantPortal() {
         toast.success(`🎉 Rent of ${formatCurrency(outstandingBalance)} paid for ${periodLabel}!`);
       } else {
         setPayTimedOut(true);
-        toast.error('Payment not confirmed yet. Check your phone and try again.');
+        toast.error('❌ Payment failed — PIN not confirmed. Check your phone balance and try again.');
       }
     } catch {
       setPayLoading(false);
       setAwaitingPin(false);
-      toast.error('Payment failed. Check your connection and try again.');
+      toast.error('❌ Payment failed. Check your connection or phone balance and try again.');
     }
   };
 
